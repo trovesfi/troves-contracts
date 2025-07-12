@@ -1,22 +1,22 @@
 [package]
 name = "strkfarm_contracts"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2023_11"
 
 # See more keys and their definitions at https://docs.swmansion.com/scarb/docs/reference/manifest.html
 
 [dependencies]
-alexandria_math = { git = "https://github.com/keep-starknet-strange/alexandria.git", rev = "475eaf015f4e997cff8ec31a5e7b4ab3f9a86e32" } # later change to 2.9.2
-alexandria_storage = { git = "https://github.com/keep-starknet-strange/alexandria.git", rev = "475eaf015f4e997cff8ec31a5e7b4ab3f9a86e32" }
-alexandria_data_structures = { git = "https://github.com/keep-starknet-strange/alexandria.git", rev = "475eaf015f4e997cff8ec31a5e7b4ab3f9a86e32" }
-openzeppelin = "0.18.0"
-openzeppelin_introspection = "0.18.0"
-ekubo = { git = "https://github.com/EkuboProtocol/abis.git", rev = "edb6de8c9baf515f1053bbab3d86825d54a63bc3"}
-starknet = ">=2.6.0" # cairo version
+alexandria_math = { git = "https://github.com/keep-starknet-strange/alexandria.git", tag = "v0.5.1" } # later change to 2.9.2
+alexandria_storage = { git = "https://github.com/keep-starknet-strange/alexandria.git", tag = "v0.5.1" }
+alexandria_data_structures = { git = "https://github.com/keep-starknet-strange/alexandria.git", tag = "v0.5.1" }
+openzeppelin = "1.0.0"
+openzeppelin_introspection = "1.0.0"
+ekubo = { git = "https://github.com/EkuboProtocol/abis.git", rev = "f4a16b95967c5596d5a3cd4e0422bb9a2e3eb017"}
+starknet = ">=2.11.0" # cairo version
 
 [dev-dependencies]
-snforge_std = { git = "https://github.com/foundry-rs/starknet-foundry", tag = "v0.38.3" }
-assert_macros = "2.8.4"
+snforge_std = { git = "https://github.com/foundry-rs/starknet-foundry", tag = "v0.46.0" }
+assert_macros = "2.11.4"
 
 [[target.starknet-contract]]
 casm = true
