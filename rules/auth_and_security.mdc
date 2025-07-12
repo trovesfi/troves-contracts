@@ -1,0 +1,14 @@
+# Authorization controls
+We use common component to import standard things in a contract/component
+
+Usage:
+```cairo
+use strkfarm_contracts::components::common::CommonComp;
+```
+
+Raw component code:
+https://raw.githubusercontent.com/trovesfi/strkfarm-contracts/b5993c3f4aec7e2f869b88174c345dbf573d7fd0/src/components/common.cairo
+
+## Access control
+For mainnet, use this contract address in test:
+0x0636a3f51cc37f5729e4da4b1de6a8549a28f3c0d5bf3b17f150971e451ff9c2
