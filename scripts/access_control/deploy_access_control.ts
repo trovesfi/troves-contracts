@@ -45,7 +45,8 @@ async function grantRelayerRole() {
     const cls = await provider.getClassAt(ACCESS_CONTROL);
     const accessControl = new Contract(cls.abi, ACCESS_CONTROL, provider);  
 
-    const _RELAYER = '0x2f2183e09bbbe50755061d79aa28fd452e7cb82238ebf7038f52442e4538f80'; // rebalancer address
+    // const _RELAYER = '0x2f2183e09bbbe50755061d79aa28fd452e7cb82238ebf7038f52442e4538f80'; // rebalancer address
+    const _RELAYER = '0x6da12d8856f1e0bed0b741484c9ca7e983a4008f2c34cd23878f151147879b2'; // rebalancer address
     const call = await accessControl.populate("grant_role", [
         hash.getSelectorFromName('RELAYER'),
         _RELAYER

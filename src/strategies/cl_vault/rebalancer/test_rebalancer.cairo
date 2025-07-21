@@ -159,10 +159,8 @@ pub mod test_rebalancer {
     }
 
     #[test]
-    #[fork("mainnet_1548957")]
+    #[fork("mainnet_latest")]
     fn test_rebalancer_full_flow() {
-        start_cheat_block_number_global(BLOCK_NUMBER);
-        
         let rebalancer = deploy_rebalancer();
         let vault = get_vault();
         let caller = contract_address_const::<0x123>();
@@ -173,12 +171,12 @@ pub mod test_rebalancer {
 
         // Define new bounds (as specified in requirements)
         let new_bounds = Bounds {
-            lower: i129 { mag: 59800, sign: false },
-            upper: i129 { mag: 60000, sign: false }
+            lower: i129 { mag: 64400, sign: false },
+            upper: i129 { mag: 64800, sign: false }
         };
 
         // Fund caller with STRK tokens for swaps
-        let price_change_amount = 4673400 * pow::ten_pow(18); // 4673300 STRK
+        let price_change_amount = 3653565 * pow::ten_pow(18); // 4673300 STRK
         let rebalance_amount = 62957598 * pow::ten_pow(12); // 500 STRK
         let total_amount = price_change_amount;
         
@@ -260,8 +258,10 @@ pub mod test_rebalancer {
             vault.contract_address,
             price_change_swap_params,
             new_bounds,
+            true,
             rebalance_swap_params,
             new_bounds,
+            false,
             sell_swap_params,
             caller
         );

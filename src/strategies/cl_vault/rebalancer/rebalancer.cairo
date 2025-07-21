@@ -9,8 +9,10 @@ pub trait IClVaultRebalancer<TContractState> {
         vault_address: ContractAddress,
         price_change_swap_params: AvnuMultiRouteSwap,
         required_bounds_after_price_change: Bounds,
+        simulate_price_change: bool,
         rebalance_swap_params: AvnuMultiRouteSwap,
         new_bounds: Bounds,
+        simulate_rebalance: bool,
         sell_swap_params: AvnuMultiRouteSwap,
         receiver: ContractAddress
     );
@@ -33,17 +35,20 @@ pub mod ClVaultRebalancer {
     use strkfarm_contracts::helpers::ERC20Helper;
     use strkfarm_contracts::interfaces::oracle::{IPriceOracleDispatcher};
     use strkfarm_contracts::helpers::constants;
-    use strkfarm_contracts::unaudited::vesu_flash::{on_vesu_flash_loan, init_vesu_flashloan};
     use strkfarm_contracts::unaudited::IFlashloan::{IFlash, IVesuDispatcher, IVesuDispatcherTrait, IVesuCallback};
     use strkfarm_contracts::interfaces::IEkuboPosition::{IEkuboDispatcher, IEkuboDispatcherTrait};
     use strkfarm_contracts::interfaces::IEkuboPositionsNFT::{IEkuboNFTDispatcher, IEkuboNFTDispatcherTrait};
     use strkfarm_contracts::helpers::pow;
     use strkfarm_contracts::components::ekuboSwap::{EkuboSwapStruct, ekuboSwapImpl};
-    use ekubo::interfaces::core::{ICoreDispatcher};
     use strkfarm_contracts::components::ekuboSwap::{IRouterDispatcher};
     use strkfarm_contracts::interfaces::IERC4626::{
         IERC4626, IERC4626Dispatcher, IERC4626DispatcherTrait
     };
+    use ekubo::interfaces::core::{ICoreDispatcher, ICoreDispatcherTrait, ILocker};
+    use strkfarm_contracts::helpers::constants::{
+      EKUBO_CORE
+    };
+    use ekubo::types::delta::{Delta};
 
     #[storage]
     pub struct Storage {}
@@ -52,6 +57,11 @@ pub mod ClVaultRebalancer {
     #[derive(Drop, starknet::Event)]
     pub enum Event {
         Rebalanced: Rebalanced,
+    }
+
+    #[derive(Copy, Drop, Serde)]
+    struct SwapResult {
+        delta: Delta,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -69,8 +79,10 @@ pub mod ClVaultRebalancer {
         pub vault_address: ContractAddress,
         pub price_change_swap_params: AvnuMultiRouteSwap,
         pub required_bounds_after_price_change: Bounds,
+        pub simulate_price_change: bool,
         pub rebalance_swap_params: AvnuMultiRouteSwap,
         pub new_bounds: Bounds,
+        pub simulate_rebalance: bool,
         pub sell_swap_params: AvnuMultiRouteSwap,
         pub nft_id: u64, // Added to track the NFT ID created during liquidity addition
         pub liq: u128, // Added to track the liquidity added
@@ -85,25 +97,58 @@ pub mod ClVaultRebalancer {
         pub min_gain_bps: u128,
     }
 
-    fn VESU_ADDRESS() -> ContractAddress {
-        return 0x000d8d6dfec4d33bfb6895de9f3852143a17c6f92fd2a21da3d6924d34870160.try_into().unwrap();
+    pub fn flashloan_callback<TState, impl TIFlash: IFlash<TState>, impl TDrop: Drop<TState>,>(
+        ref self: TState,
+        core: ICoreDispatcher,
+        token: ContractAddress,
+        flash_amount: u128,
+        calldata: Span<felt252>
+    ) -> Span<felt252> {
+        // take flash loan
+        let this = get_contract_address();
+        core.withdraw(token, this, flash_amount);
+
+        // do stuff with the flash loan
+        IFlash::use_flash_loan(ref self, token, flash_amount, calldata);
+
+        // repay flash loan
+        ERC20Helper::approve(token, core.contract_address, flash_amount.into());
+        core.pay(token);
+
+        // return as 0 delta
+        let amount: u128 = 0;
+        let delta = Delta { amount0: amount.into(), amount1: amount.into() };
+        // Serialize our output type into the return data
+        let swap_result = SwapResult { delta };
+        let mut arr: Array<felt252> = ArrayTrait::new();
+        Serde::serialize(@swap_result, ref arr);
+        arr.span()
     }
 
+    // Implement ILocker for Ekubo flash loan callbacks
     #[abi(embed_v0)]
-    impl VesuCallbackImpl of IVesuCallback<ContractState> {
-        fn on_flash_loan(
-            ref self: ContractState,
-            sender: ContractAddress,
-            asset: ContractAddress,
-            amount: u256,
-            data: Span<felt252>
-        ) {
-            // Ensure the sender is the Vesu contract
-            let caller = get_caller_address();
-            assert(caller == VESU_ADDRESS(), 'Invalid sender for flash loan');
+    impl LockerImpl of ILocker<ContractState> {
+        fn locked(ref self: ContractState, id: u32, data: Span<felt252>) -> Span<felt252> {
+            /// println!("Received ekubo lock");
 
-            // Call the flash loan utility function
-            on_vesu_flash_loan(ref self, sender, asset, amount, data);
+            // First element should be the flash loan amount
+            let mut data_array = data;
+            let flash_amount_felt: felt252 = *data_array.pop_front().unwrap();
+            let flash_amount: u128 = flash_amount_felt.try_into().unwrap();
+            assert(flash_amount > 0, 'EkFlash: Invalid flash amount');
+            
+            // Second element should be the token address
+            let token_felt: felt252 = *data_array.pop_front().unwrap();
+            let token: ContractAddress = token_felt.try_into().unwrap();
+            
+            // Call the flash loan callback with remaining data
+            flashloan_callback(
+                ref self,
+                ICoreDispatcher { contract_address: EKUBO_CORE() },
+                token,
+                flash_amount,
+                data_array // Remaining calldata
+            )
         }
     }
 
@@ -112,6 +157,7 @@ pub mod ClVaultRebalancer {
         fn use_flash_loan(
             ref self: ContractState, token: ContractAddress, flash_amount: u128, calldata: Span<felt252>
         ) {
+            /// println!("Using flashloan");
             let mut span_array = calldata;
             let action = *span_array.pop_front().unwrap();
             if (action == 1) {
@@ -129,8 +175,10 @@ pub mod ClVaultRebalancer {
                     vault_address,
                     price_change_swap_params,
                     old_bounds,
+                    deserialized_struct.simulate_price_change,
                     rebalance_swap_params,
                     new_bounds,
+                    deserialized_struct.simulate_rebalance,
                     sell_swap_params,
                     nft_id,
                     liq,
@@ -164,10 +212,12 @@ pub mod ClVaultRebalancer {
             // move price params
             price_change_swap_params: AvnuMultiRouteSwap,
             required_bounds_after_price_change: Bounds,
+            simulate_price_change: bool,
 
             // rebalance params
             rebalance_swap_params: AvnuMultiRouteSwap,
             new_bounds: Bounds,
+            simulate_rebalance: bool,
 
             // This is the swap to close books and sell xSTRK
             sell_swap_params: AvnuMultiRouteSwap,
@@ -185,6 +235,7 @@ pub mod ClVaultRebalancer {
 
             // Step 1: Add small liquidity to Ekubo to ensure the price change can be executed
             let pool_key = vault.get_settings().pool_key;
+            /// println!("Adding base liquidity");
             let (nft_id, liq) = self._add_ekubo_liquidity(
                 pool_key,
                 new_bounds
@@ -195,26 +246,31 @@ pub mod ClVaultRebalancer {
                 vault_address,
                 price_change_swap_params,
                 required_bounds_after_price_change,
+                simulate_price_change,
                 rebalance_swap_params,
                 new_bounds,
+                simulate_rebalance,
                 sell_swap_params,
                 nft_id, // This will be set after adding liquidity
                 liq, // This will be set after adding liquidity
                 caller
             };
-            let mut data = array![1]; // Action type for rebalance
-            myStruct.serialize(ref data);
 
             // Call flash loan 
-            init_vesu_flashloan(
-                ref self,
-                IVesuDispatcher { contract_address: VESU_ADDRESS() },
-                from_token,
-                from_amount.try_into().unwrap(),
-                data.span()
-            );
+            /// println!("Calling flash loan");
+            /// println!("Amount: {:?}", from_amount);
+            /// println!("Token: {:?}", from_token);
+            let mut calldata: Array<felt252> = array![];
+            from_amount.low.serialize(ref calldata);
+            from_token.serialize(ref calldata);
+            calldata.append(1); // Append action type
+            myStruct.serialize(ref calldata);
+            ICoreDispatcher {
+                contract_address: constants::EKUBO_CORE()
+            }.lock(calldata.span());
 
             // Step 4: Send any remaining funds back to receiver
+            /// println!("Returning remaining funds to receiver");
             self._return_remaining_funds(receiver, from_token);
             self._return_remaining_funds(receiver, to_token);
 
@@ -241,22 +297,22 @@ pub mod ClVaultRebalancer {
             assert(from_amount > 0, 'Buy swap amt <= 0');
 
             // Init the flash loan
-            let mut data = array![2]; // Action type for arbitrage
             let arbParam = ArbitrageParams {
                 buy_swap_params,
                 sell_swap_params,
                 receiver,
                 min_gain_bps
             };
-            arbParam.serialize(ref data);
 
-            init_vesu_flashloan(
-                ref self,
-                IVesuDispatcher { contract_address: VESU_ADDRESS() },
-                from_token,
-                from_amount.try_into().unwrap(),
-                data.span()
-            );
+            let mut calldata: Array<felt252> = array![];
+            from_amount.low.serialize(ref calldata);
+            from_token.serialize(ref calldata);
+            calldata.serialize(ref calldata);
+            calldata.append(2); // Append action type
+            arbParam.serialize(ref calldata);
+            ICoreDispatcher {
+                contract_address: constants::EKUBO_CORE()
+            }.lock(calldata.span());
 
             // Return any remaining funds to the receiver
             self._return_remaining_funds(receiver, from_token);
@@ -281,10 +337,12 @@ pub mod ClVaultRebalancer {
             // move price
             price_change_swap_params: AvnuMultiRouteSwap,
             required_bounds_after_price_change: Bounds,
+            simulate_price_change: bool,
 
             // rebalance prams
             rebalance_swap_params: AvnuMultiRouteSwap,
             new_bounds: Bounds,
+            simulate_rebalance: bool,
 
             // close books
             sell_swap_params: AvnuMultiRouteSwap,
@@ -297,7 +355,7 @@ pub mod ClVaultRebalancer {
            
             // Step 0: Add small liquidity to Ekubo to ensure the price change can be executed
             let pool_key = vault.get_settings().pool_key;
-
+            /// println!("Calling _rebalance");
             // Step 1: Execute price change swap to move ekubo pool price
             // This ensures the new bounds will be valid for the rebalance
             if price_change_swap_params.token_from_amount > 0 {
@@ -316,6 +374,8 @@ pub mod ClVaultRebalancer {
                 assert(pool_price.tick <= required_bounds_after_price_change.upper, 'Price chng did not reach upper');
             }
 
+            assert(!simulate_price_change, 'Price change simulation done');
+
             // Step 2: Call the vault's rebalance function
             let total_supply = ERC20Helper::total_supply(vault.contract_address);
             let assetInfoBefore = vault.convert_to_assets(total_supply);
@@ -325,6 +385,7 @@ pub mod ClVaultRebalancer {
             );
 
             vault.rebalance(new_bounds, rebalance_swap_params);
+            assert(!simulate_rebalance, 'Rebalance simulation done');
 
             // Step 4: Withdraw any positions created during the rebalance
             let (amt0, amt1) = self._withdraw_position(
