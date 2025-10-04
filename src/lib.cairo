@@ -4,6 +4,11 @@ pub mod helpers {
     pub mod pow;
     pub mod safe_decimal_math;
     pub mod constants;
+    pub mod safe_math;
+}
+
+pub mod peripheral {
+    pub mod aum_oracle;
 }
 
 pub mod components {
@@ -13,6 +18,9 @@ pub mod components {
         pub mod defi_spring_default_style;
         pub mod interface;
         pub mod reward_shares;
+    }
+    pub mod oracle {
+        pub mod pragma_oracle;
     }
     pub mod ekuboSwap;
     pub mod swap;

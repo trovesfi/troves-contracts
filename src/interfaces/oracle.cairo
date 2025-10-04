@@ -11,8 +11,8 @@ use starknet::{ContractAddress};
 
 #[derive(Drop, Serde)]
 pub struct PriceWithUpdateTime {
-    price: felt252,
-    update_time: felt252
+    pub price: felt252,
+    pub update_time: felt252
 }
 
 #[starknet::interface]
@@ -50,12 +50,14 @@ pub enum SimpleDataType {
 pub enum AggregationMode {
     Median: (),
     Mean: (),
+    ConversionRate: (),
     Error: (),
 }
 
 #[starknet::interface]
 pub trait IPragmaOracle<TContractState> {
     fn get_data_median(self: @TContractState, data_type: PragmaDataType) -> PragmaPricesResponse;
+    fn get_data(self: @TContractState, data_type: PragmaDataType, aggregation_mode: AggregationMode) -> PragmaPricesResponse;
     fn get_data_with_USD_hop(
         self: @TContractState,
         base_currency_id: felt252,
@@ -78,4 +80,17 @@ pub trait IPragmaNostraMock<TContractState> {
         quote_currency_id: felt252,
         aggregation_mode: felt252,
     ) -> (felt252, felt252, felt252, felt252);
+}
+
+#[starknet::interface]
+pub trait IPriceOracleSource<TContractState> {
+    //
+    // Getters
+    //
+
+    /// Get the price of the token in USD with 8 decimals.
+    fn get_price(self: @TContractState) -> felt252;
+
+    /// Get the price of the token in USD with 8 decimals and update timestamp.
+    fn get_price_with_time(self: @TContractState) -> PriceWithUpdateTime;
 }

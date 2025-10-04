@@ -1,7 +1,13 @@
 import { ACCOUNT_NAME, deployContract, getAccount, getRpcProvider, getSwapInfo, myDeclare } from "../lib/utils";
+<<<<<<< Updated upstream
 import { EKUBO_POSITIONS, EKUBO_CORE, EKUBO_POSITIONS_NFT, ORACLE_OURS, wstETH, ETH, ACCESS_CONTROL, xSTRK, STRK, accountKeyMap, SUPER_ADMIN, USDC, USDT} from "../lib/constants";
 import { byteArray, Contract, TransactionExecutionStatus, uint256 } from "starknet";
 import { EkuboCLVaultStrategies } from "@strkfarm/sdk";
+=======
+import { EKUBO_POSITIONS, EKUBO_CORE, EKUBO_POSITIONS_NFT, ORACLE_OURS, wstETH, ETH, ACCESS_CONTROL, xSTRK, STRK, accountKeyMap, SUPER_ADMIN, USDC, USDT, WBTC, xWBTC, tBTC, xtBTC, xsBTC, solvBTC, xLBTC, LBTC} from "../lib/constants";
+import { byteArray, Contract, num, num, TransactionExecutionStatus, uint256 } from "starknet";
+import { ContractAddr, EkuboCLVaultStrategies } from "@strkfarm/sdk";
+>>>>>>> Stashed changes
 import { executeBatch, scheduleBatch } from "../timelock/actions";
 
 // Added parameters for pool configuration
@@ -152,6 +158,16 @@ async function upgrade() {
 // 0x104d7db720522a6
 if (require.main === module) {
     // deploy cl vault
+<<<<<<< Updated upstream
+=======
+    const myToken0 = xLBTC;
+    const myToken1 = LBTC;
+    const decimals = 8;
+
+    const [token0, token1] = getSortedTokens(myToken0, myToken1);
+    console.log('token0', token0);
+    console.log('token1', token1);
+>>>>>>> Stashed changes
     const poolKey = createPoolKey(
         STRK,
         USDC,
@@ -167,14 +183,14 @@ if (require.main === module) {
 
     console.log('bounds', bounds);
     console.log('Pool key: ', poolKey);
-    // declareAndDeployConcLiquidityVault(
-    //     poolKey,
-    //     bounds,
-    //     1000, // 10% fee
-    //     "0x06419f7DeA356b74bC1443bd1600AB3831b7808D1EF897789FacFAd11a172Da7", // fee collector
-    //     "tEkubo STRK/USDC",
-    //     "tEkSTRKUSDC",
-    //  );
+    declareAndDeployConcLiquidityVault(
+        poolKey,
+        bounds,
+        1000, // 10% fee
+        "0x06419f7DeA356b74bC1443bd1600AB3831b7808D1EF897789FacFAd11a172Da7", // fee collector
+        "tEkubo xLBTC/LBTC",
+        "tEkubo xLBTC/LBTC",
+     );
     // rebalance();
 
     // upgrade()
