@@ -20,7 +20,7 @@ export async function scheduleBatch(
 ) {
     const provider = getRpcProvider();
     const timelockCls = await provider.getClassAt(TIMELOCK);
-    const timelock = new Contract(timelockCls.abi, TIMELOCK, provider);
+    const timelock = new Contract({abi: timelockCls.abi, address: TIMELOCK, providerOrAccount: provider});
 
     if (predecessor !== "0x0") {
         const is_operation: any = await timelock.call("is_operation", [predecessor]);
@@ -33,7 +33,7 @@ export async function scheduleBatch(
     const call = timelock.populate("schedule_batch", [_calls, predecessor, salt, TIMELOCK_DELAY]);
     const acc = getAccount(accountKeyMap[SUPER_ADMIN]);
     const gas = await acc.estimateInvokeFee([call]);
-    console.log(`Estimated gas: ${gas.suggestedMaxFee}`);
+    console.log(`Estimated gas: ${gas.overall_fee}`);
     if (justReturnCalls) {
         return [call];
     }
@@ -53,7 +53,7 @@ export async function executeBatch(
 ) {
     const provider = getRpcProvider();
     const timelockCls = await provider.getClassAt(TIMELOCK);
-    const timelock = new Contract(timelockCls.abi, TIMELOCK, provider);
+    const timelock = new Contract({abi: timelockCls.abi, address: TIMELOCK, providerOrAccount: provider});
 
     if (predecessor !== "0x0") {
         const is_operation: any = await timelock.call("is_operation", [salt]);

@@ -14,7 +14,11 @@ pub trait IClVaultRebalancer<TContractState> {
         new_bounds: Bounds,
         simulate_rebalance: bool,
         sell_swap_params: AvnuMultiRouteSwap,
-        receiver: ContractAddress
+        receiver: ContractAddress,
+        lst_address: ContractAddress,
+        add_liquidity_amount0: u256,
+        add_liquidity_amount1: u256,
+        allow_loss: bool
     );
 
     fn arbitrage(
@@ -49,13 +53,43 @@ pub mod ClVaultRebalancer {
       EKUBO_CORE
     };
     use ekubo::types::delta::{Delta};
+    use openzeppelin::upgrades::upgradeable::UpgradeableComponent;
+    use strkfarm_contracts::components::common::CommonComp;
+    use openzeppelin::security::pausable::{PausableComponent};
+    use openzeppelin::security::reentrancyguard::{ReentrancyGuardComponent};
+
+    component!(path: CommonComp, storage: common, event: CommonCompEvent);
+    component!(path: UpgradeableComponent, storage: upgradeable, event: UpgradeableEvent);
+    component!(path: PausableComponent, storage: pausable, event: PausableEvent);
+    component!(path: ReentrancyGuardComponent, storage: reng, event: ReentrancyGuardEvent);
+
+    #[abi(embed_v0)]
+    impl CommonCompImpl = CommonComp::CommonImpl<ContractState>;
+    impl CommonInternalImpl = CommonComp::InternalImpl<ContractState>;
 
     #[storage]
-    pub struct Storage {}
+    pub struct Storage {
+        #[substorage(v0)]
+        common: CommonComp::Storage,
+        #[substorage(v0)]
+        upgradeable: UpgradeableComponent::Storage,
+        #[substorage(v0)]
+        pausable: PausableComponent::Storage,
+        #[substorage(v0)]
+        reng: ReentrancyGuardComponent::Storage,
+    }
 
     #[event]
     #[derive(Drop, starknet::Event)]
     pub enum Event {
+        #[flat]
+        CommonCompEvent: CommonComp::Event,
+        #[flat]
+        UpgradeableEvent: UpgradeableComponent::Event,
+        #[flat]
+        ReentrancyGuardEvent: ReentrancyGuardComponent::Event,
+        #[flat]
+        PausableEvent: PausableComponent::Event,
         Rebalanced: Rebalanced,
     }
 
@@ -87,6 +121,8 @@ pub mod ClVaultRebalancer {
         pub nft_id: u64, // Added to track the NFT ID created during liquidity addition
         pub liq: u128, // Added to track the liquidity added
         pub caller: ContractAddress, // Added to track the caller
+        pub lst_address: ContractAddress,
+        pub allow_loss: bool,
     }
 
     #[derive(Drop, Clone, Serde)]
@@ -95,6 +131,14 @@ pub mod ClVaultRebalancer {
         pub sell_swap_params: AvnuMultiRouteSwap,
         pub receiver: ContractAddress,
         pub min_gain_bps: u128,
+    }
+
+    #[constructor]
+    fn constructor(
+        ref self: ContractState,
+        access_control: ContractAddress
+    ) {
+        self.common.initializer(access_control);
     }
 
     pub fn flashloan_callback<TState, impl TIFlash: IFlash<TState>, impl TDrop: Drop<TState>,>(
@@ -171,6 +215,8 @@ pub mod ClVaultRebalancer {
                 let nft_id = deserialized_struct.nft_id;
                 let liq = deserialized_struct.liq;
                 let caller = deserialized_struct.caller;
+                let lst_address = deserialized_struct.lst_address;
+                let allow_loss = deserialized_struct.allow_loss;
                 self._rebalance(
                     vault_address,
                     price_change_swap_params,
@@ -182,7 +228,9 @@ pub mod ClVaultRebalancer {
                     sell_swap_params,
                     nft_id,
                     liq,
-                    caller
+                    caller,
+                    lst_address,
+                    allow_loss
                 );
             } else if (action == 2) {
                 // handle arbitrage
@@ -221,8 +269,13 @@ pub mod ClVaultRebalancer {
 
             // This is the swap to close books and sell xSTRK
             sell_swap_params: AvnuMultiRouteSwap,
-            receiver: ContractAddress
+            receiver: ContractAddress,
+            lst_address: ContractAddress,
+            add_liquidity_amount0: u256,
+            add_liquidity_amount1: u256,
+            allow_loss: bool
         ) {
+            self.common.assert_relayer_role();
             let caller = get_caller_address();
             
             // Get the vault dispatcher
@@ -238,7 +291,9 @@ pub mod ClVaultRebalancer {
             /// println!("Adding base liquidity");
             let (nft_id, liq) = self._add_ekubo_liquidity(
                 pool_key,
-                new_bounds
+                new_bounds,
+                add_liquidity_amount0,
+                add_liquidity_amount1
             );
 
             // serialise the parameters for flash loan
@@ -253,7 +308,9 @@ pub mod ClVaultRebalancer {
                 sell_swap_params,
                 nft_id, // This will be set after adding liquidity
                 liq, // This will be set after adding liquidity
-                caller
+                caller,
+                lst_address,
+                allow_loss
             };
 
             // Call flash loan 
@@ -290,6 +347,8 @@ pub mod ClVaultRebalancer {
             receiver: ContractAddress,
             min_gain_bps: u128
         ) {
+            self.common.assert_relayer_role();
+
             let from_token = buy_swap_params.token_from_address;
             let to_token = buy_swap_params.token_to_address;
             let from_amount = buy_swap_params.token_from_amount;
@@ -348,7 +407,9 @@ pub mod ClVaultRebalancer {
             sell_swap_params: AvnuMultiRouteSwap,
             nft_id: u64,
             liq: u128,
-            caller: ContractAddress
+            caller: ContractAddress,
+            lst_address: ContractAddress,
+            allow_loss: bool
         ) {
             let vault = IClVaultDispatcher { contract_address: vault_address };
             let this = get_contract_address();
@@ -370,22 +431,28 @@ pub mod ClVaultRebalancer {
 
                 let pool_price = IEkuboDispatcher { contract_address: constants::EKUBO_POSITIONS() }
                 .get_pool_price(pool_key);
+                // panic!("Pool price: {:?}, lower: {:?}, upper: {:?}", pool_price.tick, required_bounds_after_price_change.lower, required_bounds_after_price_change.upper);
                 assert(pool_price.tick >= required_bounds_after_price_change.lower, 'Price chng did not reach lower');
                 assert(pool_price.tick <= required_bounds_after_price_change.upper, 'Price chng did not reach upper');
             }
 
             assert(!simulate_price_change, 'Price change simulation done');
 
+            let pool_key = vault.get_settings().pool_key;
+
             // Step 2: Call the vault's rebalance function
             let total_supply = ERC20Helper::total_supply(vault.contract_address);
             let assetInfoBefore = vault.convert_to_assets(total_supply);
             let summary_before = self._summarize_position(
+                lst_address,
+                pool_key,
                 assetInfoBefore.amount0,
                 assetInfoBefore.amount1
             );
 
             vault.rebalance(new_bounds, rebalance_swap_params);
             assert(!simulate_rebalance, 'Rebalance simulation done');
+            // assert(false, 'Rebalance done');
 
             // Step 4: Withdraw any positions created during the rebalance
             let (amt0, amt1) = self._withdraw_position(
@@ -396,17 +463,20 @@ pub mod ClVaultRebalancer {
             );
 
             // Step 5: Swap xSTRK to STRK
-            let xSTRKBal = ERC20Helper::balanceOf(constants::XSTRK_ADDRESS(), this);
+            let underyling_address = if pool_key.token0 == lst_address { pool_key.token1 } else { pool_key.token0 };
+            let xSTRKBal = ERC20Helper::balanceOf(lst_address, this);
 
             // settle funds used for initial LP
-            assert(xSTRKBal >= amt0.into(), 'xSTRK balance too low');
+            let amtLST = if pool_key.token0 == lst_address { amt0 } else { amt1 };
+            assert(xSTRKBal >= amtLST.into(), 'LST balance too low');
             ERC20Helper::transfer(
-                constants::XSTRK_ADDRESS(),
+                lst_address,
                 caller,
-                amt0.into() // Send xSTRK to caller
+                amtLST.into() // Send xSTRK to caller
             );
-            let xSTRKBal = xSTRKBal - amt0.into(); // Update balance after transfer
+            let xSTRKBal = xSTRKBal - amtLST.into(); // Update balance after transfer
 
+            let xSTRKBal2 = ERC20Helper::balanceOf(lst_address, this);
             if xSTRKBal > 0 {
                 let mut _sell_swap_params = sell_swap_params.clone();
                 _sell_swap_params.token_from_amount = xSTRKBal; // Sell 100% of xSTRK balance
@@ -414,22 +484,30 @@ pub mod ClVaultRebalancer {
                 // Swap
                 _sell_swap_params.swap(IPriceOracleDispatcher { contract_address: constants::ORACLE_OURS() });
             }
+            // panic!("amtLST: {:?}, xSTRKBal: {:?}, xSTRKBal2: {:?}", amtLST, xSTRKBal, xSTRKBal2);
 
-            let STRKBal = ERC20Helper::balanceOf(constants::STRK_ADDRESS(), this);
-            assert(STRKBal >= amt1.into(), 'STRK bal after reb is too low');
+            let STRKBal = ERC20Helper::balanceOf(underyling_address, this);
+            let amtUnderlying = if pool_key.token0 == lst_address { amt1 } else { amt0 };
+            assert(STRKBal >= amtUnderlying.into(), 'Undr bal after reb is too low');
             // Send the LP STRK to the caller
             ERC20Helper::transfer(
-                constants::STRK_ADDRESS(),
+                underyling_address,
                 caller,
-                amt1.into() // Send all STRK except the base amount
+                amtUnderlying.into() // Send all STRK except the base amount
             );
 
             let assetInfo = vault.convert_to_assets(total_supply);
             let summary_after = self._summarize_position(
+                lst_address,
+                pool_key,
                 assetInfo.amount0,
                 assetInfo.amount1
             );
-            assert(summary_after >= summary_before, 'Rebalance did not yield profit');
+            if (summary_after < summary_before && !allow_loss) {
+                panic!("Rebalance did not yield profit: summary_after: {:?}, summary_before: {:?}", summary_after, summary_before);
+            }
+            // assert(summary_after >= summary_before, 'Rebalance did not yield profit');
+            return;
         }
 
         fn _arbitrage(
@@ -472,17 +550,14 @@ pub mod ClVaultRebalancer {
         fn _add_ekubo_liquidity(
             ref self: ContractState,
             pool_key: PoolKey,
-            bounds: Bounds
+            bounds: Bounds,
+            amount0: u256,
+            amount1: u256
         ) -> (u64, u128) {
             let this = get_contract_address();
             let caller = get_caller_address();
             let ekubo_positions = IEkuboDispatcher { contract_address: constants::EKUBO_POSITIONS() };
             
-            // just small amount is enough to to ensure position is created
-            // this is required to ensure price change can stop at the price we want
-            let amount0 = 100 * pow::ten_pow(ERC20Helper::decimals(pool_key.token0).into());
-            let amount1 = 100 * pow::ten_pow(ERC20Helper::decimals(pool_key.token1).into());
-
             // Get tokens from pool key
             let token0 = pool_key.token0;
             let token1 = pool_key.token1;
@@ -538,13 +613,20 @@ pub mod ClVaultRebalancer {
         // Only works for xSTRK/STRK
         fn _summarize_position(
             self: @ContractState,
+            lst_address: ContractAddress,
+            pool_key: PoolKey,
             amount0: u256, // xSTRK
             amount1: u256 // STRK
         ) -> u256 {
-            let xSTRK = constants::XSTRK_ADDRESS();
-            let assets = IERC4626Dispatcher { contract_address: xSTRK }
-                .convert_to_assets(amount0);
-            return amount1 + assets;
+            if pool_key.token0 == lst_address {
+                let assets = IERC4626Dispatcher { contract_address: lst_address }
+                    .convert_to_assets(amount0);
+                return amount1 + assets;
+            } else {
+                let assets = IERC4626Dispatcher { contract_address: lst_address }
+                    .convert_to_assets(amount1);
+                return amount0 + assets;
+            }
         }
     }
 }

@@ -20,7 +20,7 @@ async function transferSuperAdmin() {
     const acc = getAccount(ACCOUNT_NAME);
     const provider = getRpcProvider();
     const cls = await provider.getClassAt(ACCESS_CONTROL);
-    const accessControl = new Contract(cls.abi, ACCESS_CONTROL, provider);
+    const accessControl = new Contract({abi: cls.abi, address: ACCESS_CONTROL, providerOrAccount: provider});
 
     const call = await accessControl.populate("grant_role", [
         "0", // DEFAULT ADMIN ROLE
@@ -43,10 +43,10 @@ async function grantRelayerRole() {
     const acc = getAccount(accountKeyMap[SUPER_ADMIN]);
     const provider = getRpcProvider();
     const cls = await provider.getClassAt(ACCESS_CONTROL);
-    const accessControl = new Contract(cls.abi, ACCESS_CONTROL, provider);  
+    const accessControl = new Contract({abi: cls.abi, address: ACCESS_CONTROL, providerOrAccount: provider});  
 
     // const _RELAYER = '0x2f2183e09bbbe50755061d79aa28fd452e7cb82238ebf7038f52442e4538f80'; // rebalancer address
-    const _RELAYER = '0x6da12d8856f1e0bed0b741484c9ca7e983a4008f2c34cd23878f151147879b2'; // rebalancer address
+    const _RELAYER = '0x2b8572889935025b16ad39a9235d1c3c46bc2b5694de5d81338931149f39a0d'; // rebalancer address
     const call = await accessControl.populate("grant_role", [
         hash.getSelectorFromName('RELAYER'),
         _RELAYER
@@ -62,11 +62,34 @@ async function grantRelayerRole() {
     console.log(`Relayer role granted`);
 }
 
+async function revokeRelayerRole() {
+    const acc = getAccount(accountKeyMap[SUPER_ADMIN]);
+    const provider = getRpcProvider();
+    const cls = await provider.getClassAt(ACCESS_CONTROL);
+    const accessControl = new Contract({abi: cls.abi, address: ACCESS_CONTROL, providerOrAccount: provider});  
+
+    // const _RELAYER = '0x2f2183e09bbbe50755061d79aa28fd452e7cb82238ebf7038f52442e4538f80'; // rebalancer address
+    const _RELAYER = '0x352298bb23d672adc66db35265470d15009ef9767609bebdfb9c4963d437835'; // rebalancer address
+    const call = await accessControl.populate("revoke_role", [
+        hash.getSelectorFromName('RELAYER'),
+        _RELAYER
+    ]);
+    
+    const scheduleCall = await scheduleBatch([call], "0", "0x0", true);
+    const executeCall = await executeBatch([call], "0", "0x0", true);
+    const tx = await acc.execute([...scheduleCall, ...executeCall]);
+    console.log(`Granted relayer role. tx: ${tx.transaction_hash}`);
+    await provider.waitForTransaction(tx.transaction_hash, {
+        successStates: [TransactionExecutionStatus.SUCCEEDED]
+    });
+    console.log(`Relayer role revoked`);
+}
+
 async function addGovernor() {
     const acc = getAccount(accountKeyMap[SUPER_ADMIN]);
     const provider = getRpcProvider();
     const cls = await provider.getClassAt(ACCESS_CONTROL);
-    const accessControl = new Contract(cls.abi, ACCESS_CONTROL, provider);
+    const accessControl = new Contract({abi: cls.abi, address: ACCESS_CONTROL, providerOrAccount: provider});
 
     const calls = GOVERNOR.map((gov) => {
         return accessControl.populate("grant_role", [
@@ -89,7 +112,7 @@ async function renounceRole() {
     const acc = getAccount(accountKeyMap[SUPER_ADMIN]);
     const provider = getRpcProvider();
     const cls = await provider.getClassAt(ACCESS_CONTROL);
-    const accessControl = new Contract(cls.abi, ACCESS_CONTROL, provider);
+    const accessControl = new Contract({abi: cls.abi, address: ACCESS_CONTROL, providerOrAccount: provider});
 
     const call = await accessControl.populate("renounce_role", [
         hash.getSelectorFromName('GOVERNOR'),
@@ -111,4 +134,5 @@ if (require.main === module) {
     // addGovernor().catch(console.error);
     // renounceRole().catch(console.error);
     grantRelayerRole().catch(console.error);
+    // revokeRelayerRole().catch(console.error);
 }

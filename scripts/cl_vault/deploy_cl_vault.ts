@@ -150,7 +150,28 @@ async function upgrade() {
 
 async function deployRebalancer() {
     const { class_hash } = await myDeclare("ClVaultRebalancer");
-    await deployContract("ClVaultRebalancer", class_hash, {});
+    await deployContract("ClVaultRebalancer", class_hash, {
+        access_control: ACCESS_CONTROL,
+    });
+}
+
+async function upgradeRebalancer() {
+    const { class_hash } = await myDeclare("ClVaultRebalancer");
+    const addr = '0x2b8572889935025b16ad39a9235d1c3c46bc2b5694de5d81338931149f39a0d';
+    const cls = await getRpcProvider().getClassAt(addr);
+    const contract = new Contract({abi: cls.abi, address: addr, providerOrAccount: getRpcProvider()});
+    const acc = getAccount(accountKeyMap[SUPER_ADMIN]);
+
+    const call = await contract.populate("upgrade", [class_hash]);
+    const salt = '0x1';
+    const scheduleCall = await scheduleBatch([call], salt, "0x0", true);
+    const executeCall = await executeBatch([call], salt, "0x0", true);
+    const tx = await acc.execute([...scheduleCall, ...executeCall]);
+    console.log(`Upgrade scheduled. tx: ${tx.transaction_hash}`);
+    await getRpcProvider().waitForTransaction(tx.transaction_hash, {
+        successStates: [TransactionExecutionStatus.SUCCEEDED]
+    });
+    console.log(`Upgrade done`);
 }
 
 // 0x104d7db720522a6
@@ -183,5 +204,6 @@ if (require.main === module) {
     // rebalance();
 
     // upgrade()
-    deployRebalancer();
+    // deployRebalancer();
+    upgradeRebalancer()
 }
