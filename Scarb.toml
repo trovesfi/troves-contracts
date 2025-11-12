@@ -8,9 +8,7 @@ edition = "2023_11"
 [dependencies]
 alexandria_math = { git = "https://github.com/keep-starknet-strange/alexandria.git", rev = "475eaf015f4e997cff8ec31a5e7b4ab3f9a86e32" } # later change to 2.9.2
 alexandria_storage = { git = "https://github.com/keep-starknet-strange/alexandria.git", rev = "475eaf015f4e997cff8ec31a5e7b4ab3f9a86e32" }
-alexandria_data_structures = { git = "https://github.com/keep-starknet-strange/alexandria.git", rev = "475eaf015f4e997cff8ec31a5e7b4ab3f9a86e32" }
 openzeppelin = "0.18.0"
-openzeppelin_introspection = "0.18.0"
 ekubo = { git = "https://github.com/EkuboProtocol/abis.git", rev = "edb6de8c9baf515f1053bbab3d86825d54a63bc3"}
 starknet = ">=2.6.0" # cairo version
 

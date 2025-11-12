@@ -16,9 +16,9 @@ pub struct ClSettings {
     pub fee_settings: FeeSettings,
 }
 
-#[derive(Drop, Copy, Serde)]
+#[derive(Drop, Serde)]
 pub struct MyPosition {
-    pub liquidity: u256,
+    pub liquidity: Array<u256>,
     pub amount0: u256,
     pub amount1: u256,
 }
@@ -62,7 +62,7 @@ pub trait IClVault<TContractState> {
         ref self: TContractState, amount0: u256, amount1: u256, receiver: ContractAddress
     ) -> u256;
     fn withdraw(ref self: TContractState, shares: u256, receiver: ContractAddress) -> MyPosition;
-    fn convert_to_shares(self: @TContractState, amount0: u256, amount1: u256) -> u256;
+    fn convert_to_shares(ref self: TContractState, amount0: u256, amount1: u256) -> u256;
     fn convert_to_assets(self: @TContractState, shares: u256) -> MyPosition;
     fn liquidity_per_pool(self: @TContractState, pool: ManagedPool) -> u256;
     fn get_position_key(self: @TContractState, pool: ManagedPool) -> PositionKey;
@@ -76,7 +76,7 @@ pub trait IClVault<TContractState> {
         swapInfo1: AvnuMultiRouteSwap,
         swapInfo2: AvnuMultiRouteSwap
     );
-    fn get_settings(self: @TContractState, pool: ManagedPool) -> ClSettings;
+    fn get_pool_settings(self: @TContractState, pool: ManagedPool) -> ClSettings;
     fn handle_unused(ref self: TContractState, swap_params: AvnuMultiRouteSwap, pool: ManagedPool);
     fn rebalance_pool(ref self: TContractState, new_bounds: Bounds, swap_params: AvnuMultiRouteSwap, pool: ManagedPool);
     fn rebalance_all_pools(ref self: TContractState, new_bounds: Array<Bounds>, swap_params: Array<AvnuMultiRouteSwap>);

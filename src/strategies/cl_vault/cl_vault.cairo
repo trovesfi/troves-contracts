@@ -77,8 +77,8 @@ mod ConcLiquidityVault {
         sender: ContractAddress,
         #[key]
         owner: ContractAddress,
-        assets: u256,
-        shares: u256
+        amount0: u256,
+        amount1: u256
     }
 
     #[derive(Drop, starknet::Event)]
@@ -89,8 +89,8 @@ mod ConcLiquidityVault {
         receiver: ContractAddress,
         #[key]
         owner: ContractAddress,
-        assets: u256,
-        shares: u256
+        amount0: u256,
+        amount1: u256
     }
 
     #[derive(Drop, Copy, starknet::Event)]
@@ -224,13 +224,13 @@ mod ConcLiquidityVault {
             self.common.assert_not_paused();
             let caller: ContractAddress = get_caller_address();
             assert(amount0 > 0 || amount1 > 0, 'amounts cannot be zero');
-            let (shares, assets) = self._token_deposit(amount0, amount1);
+            let (shares, _) = self._process_deposit(amount0, amount1, true);
             // mint shares
             self.erc20.mint(receiver, shares);
 
             self
                 .emit(
-                    Deposit { sender: caller, owner: receiver, assets: assets, shares }
+                    Deposit { sender: caller, owner: receiver, amount0: amount0, amount1: amount1 }
                 );
             return shares;
         }
@@ -251,22 +251,21 @@ mod ConcLiquidityVault {
             let max_shares = self.balance_of(caller);
             assert(shares <= max_shares, 'insufficient shares');
 
-            let userPosition = self.convert_to_assets(shares);
-            assert(userPosition.liquidity > 0, 'invalid liquidity removed');
-
             let mut i = 0;
             let mut total_amt0 = 0;
             let mut total_amt1 = 0;
+            let mut liquidities = ArrayTrait::<u256>::new();
             while i != self.managed_pools.len() {
                 let pool = self.managed_pools[i].read();
                 self.handle_fees(pool);
-                let pool_liq = self._convert_to_assets(shares, pool);
+                let liquidity_to_withdraw = self._convert_to_assets(shares, pool);
 
                 let old_liq = self.get_position(pool).liquidity;
 
-                let (amt0, amt1) = self._withdraw_position(pool_liq, pool);
+                let (amt0, amt1) = self._withdraw_position(liquidity_to_withdraw, pool);
                 total_amt0 += amt0.into();
                 total_amt1 += amt1.into();
+                liquidities.append(liquidity_to_withdraw);
 
                 let current_liq = self.get_position(pool).liquidity;
 
@@ -281,7 +280,7 @@ mod ConcLiquidityVault {
                 }
 
                 assert(
-                    (old_liq - current_liq).into() == userPosition.liquidity,
+                    (old_liq - current_liq).into() == liquidity_to_withdraw,
                     'invalid liquidity removed'
                 );
             }
@@ -300,12 +299,12 @@ mod ConcLiquidityVault {
                         sender: caller,
                         receiver,
                         owner: receiver,
-                        assets: userPosition.liquidity,
-                        shares
+                        amount0: total_amt0,
+                        amount1: total_amt1
                     }
                 );
             return MyPosition {
-                liquidity: userPosition.liquidity, amount0: total_amt0.into(), amount1: total_amt0.into()
+                liquidity: liquidities, amount0: total_amt0.into(), amount1: total_amt0.into()
             };
         }
 
@@ -315,34 +314,10 @@ mod ConcLiquidityVault {
         /// @param amount0 The amount of the first asset.
         /// @param amount1 The amount of the second asset.
         /// @return shares The number of shares corresponding to the provided asset amounts.
-        fn convert_to_shares(self: @ContractState, amount0: u256, amount1: u256) -> u256 {
-            let mut i = 0;
-            let mut total_shares: u256 = 0;
+        fn convert_to_shares(ref self: ContractState, amount0: u256, amount1: u256) -> u256 {
+            let (shares, _) = self._process_deposit(amount0, amount1, false);
 
-            while i != self.managed_pools.len() {
-                let pool = self.managed_pools[i].read();
-                let sqrt_vals = self.sqrt_values[i].read();
-                let current_sqrt_price = self.get_pool_price(pool).sqrt_ratio;
-
-                // calculate liquidity for this range
-                let range_liquidity = ekuboLibDispatcher()
-                    .max_liquidity(
-                        current_sqrt_price,
-                        sqrt_vals.sqrt_lower,
-                        sqrt_vals.sqrt_upper,
-                        amount0.try_into().unwrap(),
-                        amount1.try_into().unwrap(),
-                    )
-                    .into();
-
-                // convert range liquidity → shares
-                let range_shares = self._convert_to_shares(range_liquidity, pool);
-                total_shares += range_shares;
-
-                i += 1;
-            }
-
-            return total_shares;
+            shares
         }
 
         /// @notice Converts shares into the corresponding asset amounts.
@@ -353,9 +328,9 @@ mod ConcLiquidityVault {
         /// @return position A struct containing the corresponding liquidity, amount0, and amount1.
         fn convert_to_assets(self: @ContractState, shares: u256) -> MyPosition {
             let mut i = 0;
-            let mut total_liquidity: u256 = 0;
             let mut amount0 = 0;
             let mut amount1 = 0;
+            let mut liquidities = ArrayTrait::<u256>::new();
             while i != self.managed_pools.len() {
                 let pool = self.managed_pools[i].read();
                 let current_sqrt_price = self.get_pool_price(pool).sqrt_ratio;
@@ -369,12 +344,12 @@ mod ConcLiquidityVault {
                     );
                 assert(!delta.amount0.sign, 'invalid amount0');
                 assert(!delta.amount1.sign, 'invalid amount1');
-                total_liquidity += liquidity;
+                liquidities.append(liquidity);
                 amount0 += delta.amount0.mag.into();
                 amount1 += delta.amount1.mag.into();
             }
             return MyPosition {
-                liquidity: total_liquidity, amount0: amount0, amount1: amount1
+                liquidity: liquidities, amount0: amount0, amount1: amount1
             };
         }
 
@@ -506,7 +481,7 @@ mod ConcLiquidityVault {
             let bal0_pre = ERC20Helper::balanceOf(token0, get_contract_address());
             let bal1_pre = ERC20Helper::balanceOf(token1, get_contract_address());
 
-            let (shares, assets) = self._token_deposit(bal0_pre, bal1_pre);
+            let (shares, assets) = self._process_deposit(bal0_pre, bal1_pre, true);
             let bal0_post = ERC20Helper::balanceOf(token0, get_contract_address());
             let bal1_post = ERC20Helper::balanceOf(token1, get_contract_address());
             let diff0 = token0_amt - (bal0_pre - bal0_post);
@@ -574,7 +549,7 @@ mod ConcLiquidityVault {
         /// @dev This function reads various contract settings including fee settings, bounds, pool
         /// key, and oracle.
         /// @return ClSettings Struct containing the contract's current settings.
-        fn get_settings(self: @ContractState, pool: ManagedPool) -> ClSettings {
+        fn get_pool_settings(self: @ContractState, pool: ManagedPool) -> ClSettings {
             ClSettings {
                 ekubo_positions_contract: self.ekubo_positions_contract.read().contract_address,
                 bounds_settings: pool.bounds,
@@ -982,53 +957,67 @@ mod ConcLiquidityVault {
                 );
         }
 
-        fn _token_deposit(ref self: ContractState, amount0: u256, amount1: u256) -> (u256, u256) {
+        fn _process_deposit(
+            ref self: ContractState,
+            amount0: u256,
+            amount1: u256,
+            execute: bool
+        ) -> (u256, u256) {
             let caller: ContractAddress = get_caller_address();
-            let mut ranges = ArrayTrait::<(u128, u128, u128)>::new();
             let mut i = 0;
-            let mut total_amount0 = 0;
-            let mut total_amount1 = 0;
+            let mut total_amount0: u256 = 0;
+            let mut total_amount1: u256 = 0;
+            let mut ranges = ArrayTrait::<(u128, u128, u128)>::new();
+
             while i != self.managed_pools.len() {
                 let pool = self.managed_pools[i].read();
                 let (range_amt0, range_amt1, range_liq) = self.get_range_amounts(pool);
-                ranges.append((range_amt0, range_amt1, range_liq));
                 total_amount0 += range_amt0.into();
                 total_amount1 += range_amt1.into();
+                ranges.append((range_amt0, range_amt1, range_liq));
+                i += 1;
             }
 
-            i = 0;
-            let mut shares = 0;
+            let mut shares: u256 = 0;
             let mut total_assets: u256 = 0;
+            i = 0;
+
             while i != self.managed_pools.len() {
                 let pool = self.managed_pools[i].read();
                 self.handle_fees(pool);
-                let (range_amount0, range_amount1, range_liq) = ranges.at(i.try_into().unwrap());
-                let deposit_amt0 = (amount0 * (*range_amount0).into()) / total_amount0.into(); 
-                let deposit_amt1 = (amount1 * (*range_amount1).into()) / total_amount1.into(); 
+                let (range_amt0, range_amt1, range_liq) = ranges.at(i.try_into().unwrap());
 
-                let user_new_liq = (*range_liq * deposit_amt0.try_into().unwrap()) / *range_amount0;
-                let mut range_shares = 0;
+                let deposit_amt0 = (amount0 * (*range_amt0).into()) / total_amount0;
+                let deposit_amt1 = (amount1 * (*range_amt1).into()) / total_amount1;
+
+                let user_new_liq = (*range_liq * deposit_amt0.try_into().unwrap()) / *range_amt0;
+
+                let mut range_shares: u256 = 0;
                 if self.total_supply() != 0 {
-                    range_shares = (user_new_liq * self.total_supply().try_into().unwrap()) / *range_liq;
+                    range_shares =
+                        (user_new_liq.into() * self.total_supply()) / (*range_liq).into();
                 } else {
-                    // implement arrakis ratio for shares
                     let init_values = self.init_values.read();
                     let shares_from_token0 = if init_values.init0 != 0 {
-                        deposit_amt0 * 1000000000000000000_u256 / init_values.init0 } 
-                    else { 0 };
-                    let shares_from_token1 = if init_values.init1 != 0 { 
-                        deposit_amt1 * 1000000000000000000_u256 / init_values.init1 } 
-                    else { 0 };
-
+                        deposit_amt0 * 1000000000000000000_u256 / init_values.init0
+                    } else { 0 };
+                    let shares_from_token1 = if init_values.init1 != 0 {
+                        deposit_amt1 * 1000000000000000000_u256 / init_values.init1
+                    } else { 0 };
                     range_shares = if shares_from_token0 != 0 && shares_from_token1 != 0 {
-                        (shares_from_token0.try_into().unwrap() + shares_from_token1.try_into().unwrap()) / 2
+                        (shares_from_token0 + shares_from_token1) / 2
                     } else {
-                        shares_from_token0.try_into().unwrap() + shares_from_token1.try_into().unwrap()
+                        shares_from_token0 + shares_from_token1
                     };
                 }
-                shares += range_shares.into();
-                self._ekubo_deposit(caller, deposit_amt0, deposit_amt1, caller, pool);
-                total_assets += self._convert_to_assets(range_shares.into(), pool);
+
+                shares += range_shares;
+                total_assets += self._convert_to_assets(range_shares, pool);
+
+                if execute {
+                    self._ekubo_deposit(caller, deposit_amt0, deposit_amt1, caller, pool);
+                }
+
                 i += 1;
             }
 
