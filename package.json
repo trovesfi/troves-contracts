@@ -10,6 +10,7 @@
   "description": "",
   "dependencies": {
     "@avnu/avnu-sdk": "^2.1.1",
+    "@strkfarm/sdk": "link:../sdk-ts",
     "assert": "^2.1.0",
     "axios": "^1.7.2",
     "combined-stream": "^1.0.8",

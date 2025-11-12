@@ -1,0 +1,2 @@
+overrides:
+  '@strkfarm/sdk': link:../sdk-ts
