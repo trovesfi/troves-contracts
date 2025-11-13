@@ -157,11 +157,10 @@ dependencies = [
 name = "strkfarm_contracts"
 version = "1.1.1"
 dependencies = [
- "alexandria_data_structures",
  "alexandria_math",
  "alexandria_storage",
  "ekubo",
  "openzeppelin",
- "openzeppelin_introspection",
+ "openzeppelin_utils",
  "snforge_std",
 ]
