@@ -51,6 +51,10 @@ pub mod strategies {
     }
 }
 
+pub mod peripheral {
+    pub mod aum_oracle;
+}
+
 #[cfg(test)]
 pub mod tests {
     pub mod utils;

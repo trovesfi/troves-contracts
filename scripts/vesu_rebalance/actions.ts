@@ -79,14 +79,23 @@ async function harvest() {
         const call = await vesuRebalance.harvest(riskAcc);
         calls.push(...call);
     }
-    const _calls = [...calls.slice(0, 4)];
+    const _calls = [...calls.slice(0, 2)];
     const gas = await riskAcc.estimateInvokeFee(_calls);
     const tx = await riskAcc.execute(_calls);
     console.log(`Harvest tx: ${tx.transaction_hash}`);
     await getRpcProvider().waitForTransaction(tx.transaction_hash, {
         successStates: [TransactionExecutionStatus.SUCCEEDED]
     });
-    console.log('Harvest done');
+    console.log('Harvest done1');
+
+    const _calls2 = [...calls.slice(2, 4)];
+    const gas2 = await riskAcc.estimateInvokeFee(_calls2);
+    const tx2 = await riskAcc.execute(_calls2);
+    console.log(`Harvest tx: ${tx2.transaction_hash}`);
+    await getRpcProvider().waitForTransaction(tx2.transaction_hash, {
+        successStates: [TransactionExecutionStatus.SUCCEEDED]
+    });
+    console.log('Harvest done2');
 }
 
 if (require.main === module) {
