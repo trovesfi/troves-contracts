@@ -33,6 +33,10 @@ name = "mainnet_latest"
 url = "$MAINNET_RPC_URL"
 block_id.tag = "latest"
 
+[[tool.snforge.fork]]
+name = "mainnet_3862592"
+url = "$MAINNET_RPC_URL"
+block_id.number = "3862592"
 
 [[tool.snforge.fork]]
 name = "mainnet_846087"

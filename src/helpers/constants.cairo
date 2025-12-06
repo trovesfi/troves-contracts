@@ -210,7 +210,7 @@ pub fn DNMM_STRK() -> ContractAddress {
 }
 
 pub fn EKUBO_USER_ADDRESS() -> ContractAddress {
-    contract_address_const::<0x02545b2e5d519fc230e9cd781046d3a64e092114f07e44771e0d719d148725ef>()
+    contract_address_const::<0x000d8d6dfec4d33bfb6895de9f3852143a17c6f92fd2a21da3d6924d34870160>()
 }
 
 pub fn WST_ADDRESS() -> ContractAddress {

@@ -48,6 +48,7 @@ pub mod strategies {
         pub mod cl_vault;
         #[cfg(test)]
         pub mod test;
+        pub mod test_new;
     }
 }
 
