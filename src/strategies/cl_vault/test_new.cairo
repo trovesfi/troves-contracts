@@ -89,8 +89,8 @@ pub mod test_cl_vault {
 
     fn get_pool_key_usdc() -> PoolKey {
         let poolkey = PoolKey {
-            token0: constants::USDC_ADDRESS(),
-            token1: constants::ETH_ADDRESS(),
+            token0: constants::ETH_ADDRESS(),
+            token1: constants::USDC_ADDRESS(),
             fee: 170141183460469235273462165868118016,
             tick_spacing: 1000,
             extension: contract_address_const::<0x00>()
@@ -125,7 +125,7 @@ pub mod test_cl_vault {
 
     fn get_bounds_usdc() -> Bounds {
         let bounds = Bounds {
-            lower: i129 { mag: 19592000, sign: false, }, upper: i129 { mag: 19624000, sign: false, },
+            lower: i129 { mag: 19599000, sign: true, }, upper: i129 { mag: 19567000, sign: true, },
         };
 
         bounds
@@ -768,7 +768,7 @@ pub mod test_cl_vault {
                 liquidity_mint: liq.try_into().unwrap(),
                 liquidity_burn: 0,
                 pool_key: *pools.at(i).pool_key,
-                bounds: *pools.at(i).bounds
+                new_bounds: *pools.at(i).bounds
             };
             range_ins.append(ins);
             i += 1;
@@ -1060,7 +1060,7 @@ pub mod test_cl_vault {
                 liquidity_mint: liq.try_into().unwrap(),
                 liquidity_burn: liq.try_into().unwrap(),
                 pool_key: *pools.at(i).pool_key,
-                bounds: *pools.at(i).bounds
+                new_bounds: *pools.at(i).bounds
             };
             range_ins.append(ins);
             i += 1;
@@ -1206,7 +1206,7 @@ pub mod test_cl_vault {
         ERC20Helper::approve(constants::USDC_ADDRESS(), clVault.contract_address, amount_usdc * 2);
         println!("approval done");
 
-        let shares2 = clVault.deposit(amount_usdc, amount_eth, this);
+        let shares2 = clVault.deposit(amount_eth, amount_usdc, this);
         let vault_shares = ERC20Helper::balanceOf(clVault.contract_address, this);
 
         let shares_dep = ERC20Helper::balanceOf(clVault.contract_address, this);
@@ -1412,7 +1412,7 @@ pub mod test_cl_vault {
                 liquidity_mint: sample_liquidity.try_into().unwrap(),
                 liquidity_burn: 0,
                 pool_key: *pools.at(i).pool_key,
-                bounds: *pools.at(i).bounds
+                new_bounds: *pools.at(i).bounds
             };
             range_ins.append(ins);
             i += 1;

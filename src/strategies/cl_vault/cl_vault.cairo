@@ -211,13 +211,25 @@ mod ConcLiquidityVault {
         self
             .ekubo_positions_contract
             .write(IEkuboDispatcher { contract_address: ekubo_positions_contract });
+        assert(managed_pools.len() != 0, 'empty pool list');
+        let pool0 = *managed_pools.at(0);
+        let mut i = 0;
+        while i != managed_pools.len() {
+            let pool = *managed_pools.at(i);
+            assert(pool.pool_key.token0 == pool0.pool_key.token0, 'invalid token0');
+            assert(pool.pool_key.token1 == pool0.pool_key.token1, 'invalid token1');
+            i += 1;
+        }
         self.set_managed_pools(managed_pools);
         self.ekubo_positions_nft.write(ekubo_positions_nft);
         self.ekubo_core.write(ekubo_core);
         self.oracle.write(oracle);
+        assert(fee_settings.fee_bps <= 10000, 'invalid fee bps');
         self.fee_settings.write(fee_settings);
         self.is_incentives_on.write(true);
         self.reward_share.init(get_block_number());
+        assert(init_values.init0 != 0, 'invalid init0');
+        assert(init_values.init1 != 0, 'invalid init1');
         self.init_values.write(init_values);
     }
 
@@ -338,7 +350,7 @@ mod ConcLiquidityVault {
                     }
                 );
             return MyPosition {
-                liquidity: liquidities, amount0: total_amt0.into(), amount1: total_amt0.into()
+                liquidity: liquidities, amount0: total_amt0.into(), amount1: total_amt1.into()
             };
         }
 
@@ -652,6 +664,21 @@ mod ConcLiquidityVault {
             assert(rebalance_params.rebal.len().into() == self.managed_pools.len(), 'invalid rebal len');
             // assert pool key checks
             let mut i = 0;
+
+            while i != self.managed_pools.len() {
+                let stored_pool = self.managed_pools[i].read();
+                let input_pool_key = *rebalance_params.rebal.at(i.try_into().unwrap()).pool_key; // Add pool_key to RangeInstruction
+        
+                assert(stored_pool.pool_key.token0 == input_pool_key.token0, 'pool_key mismatch token0');
+                assert(stored_pool.pool_key.token1 == input_pool_key.token1, 'pool_key mismatch token1');
+                assert(stored_pool.pool_key.fee == input_pool_key.fee, 'pool_key mismatch fee');
+                assert(stored_pool.pool_key.tick_spacing == input_pool_key.tick_spacing, 'pool_key mismatch tick_spacing');
+                assert(stored_pool.pool_key.extension == input_pool_key.extension, 'pool_key mismatch extension');
+        
+                i += 1;
+            }
+
+            i = 0;
             while i != self.managed_pools.len() {
                 let pool = self.managed_pools[i].read();
                 let pool_liq = self.get_position(i).liquidity;
@@ -726,7 +753,7 @@ mod ConcLiquidityVault {
                     println!("invalid 2");
                 }
 
-                let new_bounds = rebalance_params.rebal.at(i.try_into().unwrap()).bounds;
+                let new_bounds = rebalance_params.rebal.at(i.try_into().unwrap()).new_bounds;
                 self.set_pool_data(ManagedPoolField::Bounds(*new_bounds), i);
 
                 let (sqrt_lower, sqrt_upper) = self.get_sqrt_lower_upper(*new_bounds);
@@ -806,6 +833,7 @@ mod ConcLiquidityVault {
         }
 
         fn add_pool(ref self: ContractState, pool: ManagedPool) {
+            self.common.assert_governor_role();
             let pool1 = self.managed_pools[0].read();
             assert(pool1.pool_key.token0 == pool.pool_key.token0, 'invalid token0');
             assert(pool1.pool_key.token1 == pool.pool_key.token1, 'invalid token1');
@@ -813,6 +841,7 @@ mod ConcLiquidityVault {
         }
 
         fn remove_pool(ref self: ContractState, pool_index: u64) {
+            self.common.assert_governor_role();
             let mut i = 0;
             while i != self.managed_pools.len() {
                 if i == (self.managed_pools.len() - 1) {
@@ -826,7 +855,7 @@ mod ConcLiquidityVault {
             }
         }
 
-        fn get_amount_delta(ref self: ContractState, pool_index: u64, liquidity: u256) -> (u256, u256) {
+        fn get_amount_delta(self: @ContractState, pool_index: u64, liquidity: u256) -> (u256, u256) {
             let pool = self.managed_pools[pool_index].read();
             let current_sqrt_price = self.get_pool_price(pool_index).sqrt_ratio;
             let delta = ekuboLibDispatcher()
@@ -842,6 +871,14 @@ mod ConcLiquidityVault {
 
         fn get_fee_settings(self: @ContractState) -> FeeSettings {
             self.fee_settings.read()
+        }
+
+        fn get_managed_pools_len(self: @ContractState) -> u64 {
+            self.managed_pools.len()
+        }
+
+        fn get_managed_pool(self: @ContractState, index: u64) -> ManagedPool {
+            self.managed_pools[index].read()
         }
     }
 
@@ -1195,12 +1232,8 @@ mod ConcLiquidityVault {
                 let mut shares0: u256 = 0;
                 let mut shares1: u256 = 0;
 
-                if total_under0 > 0 {
-                    shares0 = (amount0_n * ts) / total_under0;
-                }
-                if total_under1 > 0 {
-                    shares1 = (amount1_n * ts) / total_under1;
-                }
+                shares0 = (amount0_n * ts) / total_under0;
+                shares1 = (amount1_n * ts) / total_under1;
 
                 // if only one token deposited, use that shares
                 if shares0 > 0 && shares1 > 0 {
@@ -1248,24 +1281,23 @@ mod ConcLiquidityVault {
                     let (amt0, amt1, liq) = ranges.at(i.try_into().unwrap());
                     
                     // proportion of this range
+                    let total_under0_scale = total_under0 / scale0;
+                    let total_under1_scale = total_under1 / scale1;
                     let dep0 = if total_under0 > 0 {
-                        (amount0_n * ((*amt0).into() * scale0)) / total_under0
+                        (amount0 * (*amt0).into()) / total_under0_scale
                     } else { 0 };
                     
                     let dep1 = if total_under1 > 0 {
-                        (amount1_n * ((*amt1).into() * scale1)) / total_under1
+                        (amount1 * (*amt1).into()) / total_under1_scale
                     } else { 0 };
-
-                    let dep0_raw = dep0 / scale0;
-                    let dep1_raw = dep1 / scale1;
                     
-                    println!("deposit0 {:?}", dep0_raw);
-                    println!("deposit1 {:?}", dep1_raw);
+                    println!("deposit0 {:?}", dep0);
+                    println!("deposit1 {:?}", dep1);
                     
                     self._ekubo_deposit(
                         caller,
-                        dep0_raw,
-                        dep1_raw,
+                        dep0,
+                        dep1,
                         caller,
                         i
                     );

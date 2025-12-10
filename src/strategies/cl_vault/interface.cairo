@@ -60,7 +60,7 @@ pub struct RangeInstruction {
     pub liquidity_mint: u128,
     pub liquidity_burn: u128,
     pub pool_key: PoolKey,
-    pub bounds: Bounds,
+    pub new_bounds: Bounds,
 }
 
 #[derive(Drop, Serde, starknet::Event)]
@@ -98,6 +98,8 @@ pub trait IClVault<TContractState> {
     fn set_incentives_off(ref self: TContractState);
     fn add_pool(ref self: TContractState, pool: ManagedPool);
     fn remove_pool(ref self: TContractState, pool_index: u64);
-    fn get_amount_delta(ref self: TContractState, pool_index: u64, liquidity: u256) -> (u256, u256);
+    fn get_amount_delta(self: @TContractState, pool_index: u64, liquidity: u256) -> (u256, u256);
     fn get_fee_settings(self: @TContractState) -> FeeSettings;
+    fn get_managed_pools_len(self: @TContractState) -> u64;
+    fn get_managed_pool(self: @TContractState, index: u64) -> ManagedPool;
 }
