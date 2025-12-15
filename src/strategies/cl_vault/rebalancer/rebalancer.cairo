@@ -1,5 +1,5 @@
 use starknet::ContractAddress;
-use strkfarm_contracts::interfaces::IEkuboCore::Bounds;
+use strkfarm_contracts::interfaces::IEkuboCore::{Bounds, PoolKey};
 use strkfarm_contracts::components::swap::AvnuMultiRouteSwap;
 
 #[starknet::interface]
@@ -16,9 +16,20 @@ pub trait IClVaultRebalancer<TContractState> {
         sell_swap_params: AvnuMultiRouteSwap,
         receiver: ContractAddress,
         lst_address: ContractAddress,
+        add_liquidity_bounds: Bounds,
         add_liquidity_amount0: u256,
         add_liquidity_amount1: u256,
         allow_loss: bool
+    );
+
+    fn ensure_price_is_in_bounds(
+        ref self: TContractState,
+        vault_address: ContractAddress,
+        lp_bounds: Bounds,
+        price_assert_bounds: Bounds,
+        add_liquidity_amount0: u256,
+        add_liquidity_amount1: u256,
+        swap_input_params: AvnuMultiRouteSwap,
     );
 
     fn arbitrage(
@@ -28,6 +39,9 @@ pub trait IClVaultRebalancer<TContractState> {
         receiver: ContractAddress,
         min_gain_bps: u128
     );
+
+    // we assume both are LSTs, and simply check their sum > min for simplicity
+    fn assert_min_balance(self: @TContractState, token0: ContractAddress, token1: ContractAddress, min_balance: u256);
 }
 
 #[starknet::contract]
@@ -122,6 +136,7 @@ pub mod ClVaultRebalancer {
         pub liq: u128, // Added to track the liquidity added
         pub caller: ContractAddress, // Added to track the caller
         pub lst_address: ContractAddress,
+        pub sample_liquidity_bounds: Bounds,
         pub allow_loss: bool,
     }
 
@@ -217,6 +232,7 @@ pub mod ClVaultRebalancer {
                 let caller = deserialized_struct.caller;
                 let lst_address = deserialized_struct.lst_address;
                 let allow_loss = deserialized_struct.allow_loss;
+                let sample_liquidity_bounds = deserialized_struct.sample_liquidity_bounds;
                 self._rebalance(
                     vault_address,
                     price_change_swap_params,
@@ -230,6 +246,7 @@ pub mod ClVaultRebalancer {
                     liq,
                     caller,
                     lst_address,
+                    sample_liquidity_bounds,
                     allow_loss
                 );
             } else if (action == 2) {
@@ -271,6 +288,7 @@ pub mod ClVaultRebalancer {
             sell_swap_params: AvnuMultiRouteSwap,
             receiver: ContractAddress,
             lst_address: ContractAddress,
+            add_liquidity_bounds: Bounds,
             add_liquidity_amount0: u256,
             add_liquidity_amount1: u256,
             allow_loss: bool
@@ -291,7 +309,7 @@ pub mod ClVaultRebalancer {
             /// println!("Adding base liquidity");
             let (nft_id, liq) = self._add_ekubo_liquidity(
                 pool_key,
-                new_bounds,
+                add_liquidity_bounds,
                 add_liquidity_amount0,
                 add_liquidity_amount1
             );
@@ -310,6 +328,7 @@ pub mod ClVaultRebalancer {
                 liq, // This will be set after adding liquidity
                 caller,
                 lst_address,
+                sample_liquidity_bounds: add_liquidity_bounds,
                 allow_loss
             };
 
@@ -338,6 +357,62 @@ pub mod ClVaultRebalancer {
                 old_bounds,
                 new_bounds,
             }));
+        }
+
+        fn ensure_price_is_in_bounds(
+            ref self: ContractState,
+            vault_address: ContractAddress,
+            lp_bounds: Bounds,
+            price_assert_bounds: Bounds,
+            add_liquidity_amount0: u256,
+            add_liquidity_amount1: u256,
+            swap_input_params: AvnuMultiRouteSwap,
+        ) {
+            self.common.assert_relayer_role();
+
+            let vault = IClVaultDispatcher { contract_address: vault_address };
+            let pool_key = vault.get_settings().pool_key;
+            
+            // Step 1: Add small liquidity to Ekubo to ensure the price change can be executed
+            /// println!("Adding base liquidity");
+            let (nft_id, liq) = self._add_ekubo_liquidity(
+                pool_key,
+                lp_bounds,
+                add_liquidity_amount0,
+                add_liquidity_amount1
+            );
+
+            // Step 2: Execute the price change swap to move ekubo pool price
+            if swap_input_params.token_from_amount > 0 {
+                // Execute the price change swap
+                // let oracle = IPriceOracleDispatcher { contract_address: constants::ORACLE_OURS() };
+                // swap_from_swap_params.swap(oracle);
+                let ekuboStruct = EkuboSwapStruct {
+                    core: ICoreDispatcher { contract_address: constants::EKUBO_CORE(), },
+                    router: IRouterDispatcher { contract_address: constants::EKUBO_ROUTER(), }
+                };
+                // transfer the tokens to the contract
+                ERC20Helper::transfer_from(swap_input_params.token_from_address, get_caller_address(), get_contract_address(), swap_input_params.token_from_amount);
+                ekuboStruct.swap(swap_input_params);
+
+                let pool_price = IEkuboDispatcher { contract_address: constants::EKUBO_POSITIONS() }
+                .get_pool_price(pool_key);
+                // panic!("Pool price: {:?}, lower: {:?}, upper: {:?}", pool_price.tick, required_bounds_after_price_change.lower, required_bounds_after_price_change.upper);
+                assert(pool_price.tick >= price_assert_bounds.lower, 'Price chng did not reach lower');
+                assert(pool_price.tick <= price_assert_bounds.upper, 'Price chng did not reach upper');
+            }
+
+            // Step 3: Withdraw the liquidity
+            self._withdraw_position(
+                nft_id,
+                pool_key,
+                lp_bounds,
+                liq
+            );
+
+            // Step 4: Return any remaining funds to the receiver
+            self._return_remaining_funds(get_caller_address(), swap_input_params.token_from_address);
+            self._return_remaining_funds(get_caller_address(), swap_input_params.token_to_address);
         }
 
         fn arbitrage(
@@ -377,6 +452,14 @@ pub mod ClVaultRebalancer {
             self._return_remaining_funds(receiver, from_token);
             self._return_remaining_funds(receiver, to_token);
         }
+
+        fn assert_min_balance(self: @ContractState, token0: ContractAddress, token1: ContractAddress, min_balance: u256) {
+            let balance0 = ERC20Helper::balanceOf(token0, get_caller_address());
+            let balance1 = ERC20Helper::balanceOf(token1, get_caller_address());
+            if (balance0 + balance1 < min_balance) {
+                panic!("Min balance not met: balance0: {:?}, balance1: {:?}, min_balance: {:?}", balance0, balance1, min_balance);
+            }
+        }
     }
 
     #[generate_trait]
@@ -409,6 +492,7 @@ pub mod ClVaultRebalancer {
             liq: u128,
             caller: ContractAddress,
             lst_address: ContractAddress,
+            sample_liquidity_bounds: Bounds,
             allow_loss: bool
         ) {
             let vault = IClVaultDispatcher { contract_address: vault_address };
@@ -458,7 +542,7 @@ pub mod ClVaultRebalancer {
             let (amt0, amt1) = self._withdraw_position(
                 nft_id,
                 pool_key,
-                new_bounds,
+                sample_liquidity_bounds,
                 liq
             );
 

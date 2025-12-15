@@ -1,7 +1,7 @@
 import { ACCOUNT_NAME, deployContract, getAccount, getRpcProvider, getSwapInfo, myDeclare } from "../lib/utils";
 import { EKUBO_POSITIONS, EKUBO_CORE, EKUBO_POSITIONS_NFT, ORACLE_OURS, wstETH, ETH, ACCESS_CONTROL, xSTRK, STRK, accountKeyMap, SUPER_ADMIN, USDC, USDT} from "../lib/constants";
-import { byteArray, Contract, TransactionExecutionStatus, uint256 } from "starknet";
-import { EkuboCLVaultStrategies } from "@strkfarm/sdk";
+import { byteArray, Call, Contract, TransactionExecutionStatus, uint256 } from "starknet";
+import { ContractAddr, EkuboCLVault, EkuboCLVaultStrategies, getMainnetConfig, Global, PricerFromApi, TokenInfo } from "@strkfarm/sdk";
 import { executeBatch, scheduleBatch } from "../timelock/actions";
 
 // Added parameters for pool configuration
@@ -174,6 +174,117 @@ async function upgradeRebalancer() {
     console.log(`Upgrade done`);
 }
 
+async function initializePools() {
+  const ekuboCORE = '0x00000005dd3d2f4429af886cd1a3b08289dbcea99a294197e9eb43b0e0325b4b';
+
+  const STRK = Global.getDefaultTokens().filter(t => t.symbol === 'STRK')[0].address;
+  const USDC = ContractAddr.from('0x033068F6539f8e6e6b131e6B2B814e6c34A5224bC66947c47DaB9dFeE93b35fb'); // new
+  const WBTC = Global.getDefaultTokens().filter(t => t.symbol === 'WBTC')[0].address;
+  const ETH = Global.getDefaultTokens().filter(t => t.symbol === 'ETH')[0].address;
+  const USDT = Global.getDefaultTokens().filter(t => t.symbol === 'USDT')[0].address;
+  const USDCOld = Global.getDefaultTokens().filter(t => t.symbol === 'USDC')[0].address;
+  const pools = [{
+    token0: STRK,
+    token1: USDC,
+    strat: EkuboCLVaultStrategies.find(s => s.name.includes('STRK/USDC'))!
+  }, {
+    token0: USDC,
+    token1: USDT,
+    strat: EkuboCLVaultStrategies.find(s => s.name.includes('USDC/USDT'))!
+  }, {
+    token0: WBTC,
+    token1: USDC,
+    strat: EkuboCLVaultStrategies.find(s => s.name.includes('WBTC/USDC'))!
+  }, {
+    token0: ETH,
+    token1: USDC,
+    strat: EkuboCLVaultStrategies.find(s => s.name.includes('ETH/USDC'))!
+  }];
+    // }, {
+  //   token0: STRK,
+  //   token1: Global.getDefaultTokens().filter(t => t.symbol === 'xSTRK')[0].address,
+  //   strat: EkuboCLVaultStrategies.find(s => s.name.includes('xSTRK/STRK'))!
+  // }, {
+  //   token0: STRK,
+  //   token1: USDCOld,
+  //   strat: EkuboCLVaultStrategies.find(s => s.name.includes('STRK/USDC'))!
+  // }, {
+  //   token0: ETH,
+  //   token1: USDCOld,
+  //   strat: EkuboCLVaultStrategies.find(s => s.name.includes('ETH/USDC'))!
+  // }, {
+  //   token0: WBTC,
+  //   token1: USDCOld,
+  //   strat: EkuboCLVaultStrategies.find(s => s.name.includes('WBTC/USDC'))!
+  // }, {
+  //   token0: USDC,
+  //   token1: USDT,
+  //   strat: EkuboCLVaultStrategies.find(s => s.name.includes('USDC/USDT'))!
+  // }];
+
+  console.log('Initializing pools...');
+  const config = getMainnetConfig(process.env.RPC_URL!);
+  const provider = getRpcProvider();
+  const pricer = new PricerFromApi(config, await Global.getTokens());
+  const acc = getAccount(ACCOUNT_NAME);
+  const ekuboCls = await provider.getClassAt(ekuboCORE);
+  const ekuboContract = new Contract({ abi: ekuboCls.abi, address: ekuboCORE, providerOrAccount: provider });
+  const calls: Call[] = [];
+  const newPoolKeys: any[] = [];
+  for (const pool of pools) {
+    if (!pool.strat) {
+      throw new Error(`No strategy found for pool ${pool.token0}-${pool.token1}`);
+    }
+
+    // arrange ascending
+    const token0 = BigInt(pool.token0.address) < BigInt(pool.token1.address) ? pool.token0 : pool.token1;
+    const token1 = BigInt(pool.token0.address) < BigInt(pool.token1.address) ? pool.token1 : pool.token0;
+
+    const mod = new EkuboCLVault(config, pricer, pool.strat);
+    const poolKey = await mod.getPoolKey();
+    console.log(`Initializing pool ${token0}-${token1}...`);
+
+    const token0Info = USDC.eq(token0) ? { symbol: 'USDC', decimals: 6} as TokenInfo : await Global.getTokenInfoFromAddr(token0);
+    const token1Info = USDC.eq(token1) ? { symbol: 'USDC', decimals: 6} as TokenInfo : await Global.getTokenInfoFromAddr(token1);
+    const token0Price = await pricer.getPrice(token0Info.symbol);
+    const token1Price = await pricer.getPrice(token1Info.symbol);
+    console.log(`Token0: ${token0Info.symbol}, price: ${token0Price.price}`);
+    console.log(`Token1: ${token1Info.symbol}, price: ${token1Price.price}`);
+
+    const poolPrice = token0Price.price * (Math.pow(10, token1Info.decimals)) / (token1Price.price * (Math.pow(10, token0Info.decimals)));
+    const tickSpacing = Number(poolKey.tick_spacing);
+    const tick = Math.log(poolPrice) / Math.log(1.000001);
+    const roundedTick = Math.floor(tick / tickSpacing) * tickSpacing;
+    console.log(`Current price: ${poolPrice}, tick: ${tick}, rounded tick: ${roundedTick}`);
+    const newPoolKey = {
+        token0: token0.address,
+        token1: token1.address,
+        fee: poolKey.fee,
+        tick_spacing: poolKey.tick_spacing,
+        extension: poolKey.extension,
+    };
+    newPoolKeys.push({
+      pool_key: newPoolKey,
+      name: `${token0Info.symbol}/${token1Info.symbol}`
+    });
+    const data = [
+      newPoolKey ,{
+        mag: Math.abs(roundedTick),
+        sign: roundedTick < 0 ? 1 : 0
+      }
+    ];
+    const call = ekuboContract.populate('maybe_initialize_pool', data);
+    calls.push(call);
+  }
+  console.log('New pool keys: ', newPoolKeys);
+  // const tx = await acc.execute(calls);
+  // console.log(`Initialize pools tx: ${tx.transaction_hash}`);
+  // await provider.waitForTransaction(tx.transaction_hash, {
+  //     successStates: [TransactionExecutionStatus.SUCCEEDED]
+  // });
+  // console.log('Initialize pools done');
+}
+
 // 0x104d7db720522a6
 // 0x104d7db720522a6
 if (require.main === module) {
@@ -205,5 +316,6 @@ if (require.main === module) {
 
     // upgrade()
     // deployRebalancer();
-    upgradeRebalancer()
+    // upgradeRebalancer()
+    initializePools();
 }

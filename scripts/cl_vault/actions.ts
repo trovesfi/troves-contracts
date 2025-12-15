@@ -14,7 +14,7 @@ async function main() {
     console.log('Pricer ready');
 
     // const mod = new EkuboCLVault(config, pricer, EkuboCLVaultStrategies.find(s => s.name.includes('Ekubo xLBTC'))!);
-    const mod = new UniversalLstMultiplierStrategy(config, pricer, HyperLSTStrategies[4]);
+    const mod = new UniversalLstMultiplierStrategy(config, pricer, HyperLSTStrategies[0]);
     // const mod = new UniversalStrategy(config, pricer, UniversalStrategies.find(u => u.name.includes('USDT')));
 
     // const acc = getAccount('strkfarmadmin');
@@ -31,8 +31,8 @@ async function main() {
     // const hfs = await mod.getVesuHealthFactors();
     // console.log(`HFs: `, hfs);
 
-    const rewards = await mod.getPendingRewards();
-    console.log(`Rewards: `, rewards);
+    // const rewards = await mod.getPendingRewards();
+    // console.log(`Rewards: `, rewards);
 
     // const maxDepositables = await mod.maxDepositables();
     // console.log(`Max depositables: `, maxDepositables);
@@ -102,8 +102,8 @@ async function main() {
     // const total_assets = await mod.contract.call("total_assets", [], { blockIdentifier: "2882000" });
     // console.log(`Total supply: ${total_supply}, Total assets: ${total_assets}`);
 
-    // const maxBorrowables = await mod.getMaxBorrowableAmount();
-    // console.log(`Max borrowables: ${JSON.stringify(maxBorrowables)}`);
+    const maxBorrowables = await mod.getMaxBorrowableAmount();
+    console.log(`Max borrowables: ${JSON.stringify(maxBorrowables)}`);
 
     // const depositInputs = await mod.matchInputAmounts({
     //     token0: {
