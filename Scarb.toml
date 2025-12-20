@@ -6,17 +6,17 @@ edition = "2023_11"
 # See more keys and their definitions at https://docs.swmansion.com/scarb/docs/reference/manifest.html
 
 [dependencies]
-alexandria_math = { git = "https://github.com/keep-starknet-strange/alexandria.git", tag = "v0.5.1" } # later change to 2.9.2
-alexandria_storage = { git = "https://github.com/keep-starknet-strange/alexandria.git", tag = "v0.5.1" }
-alexandria_data_structures = { git = "https://github.com/keep-starknet-strange/alexandria.git", tag = "v0.5.1" }
+alexandria_math = { git = "https://github.com/keep-starknet-strange/alexandria.git", tag = "v0.8.0" } # later change to 2.9.2
+alexandria_storage = { git = "https://github.com/keep-starknet-strange/alexandria.git", tag = "v0.8.0" }
+alexandria_data_structures = { git = "https://github.com/keep-starknet-strange/alexandria.git", tag = "v0.8.0" }
 openzeppelin = "1.0.0"
 openzeppelin_introspection = "1.0.0"
 ekubo = { git = "https://github.com/EkuboProtocol/abis.git", rev = "f4a16b95967c5596d5a3cd4e0422bb9a2e3eb017"}
-starknet = ">=2.11.0" # cairo version
+starknet = ">=2.15.0" # cairo version
 
 [dev-dependencies]
-snforge_std = { git = "https://github.com/foundry-rs/starknet-foundry", tag = "v0.46.0" }
-assert_macros = "2.12.1"
+snforge_std = { git = "https://github.com/foundry-rs/starknet-foundry", tag = "v0.54.0" }
+assert_macros = "2.15.0"
 
 [[target.starknet-contract]]
 casm = true
@@ -30,82 +30,82 @@ coverage = "snforge test --save-trace-data --rerun-failed && snforge test --cove
 
 [[tool.snforge.fork]]
 name = "mainnet_latest"
-url = "$MAINNET_RPC_URL"
+url = "$MAINNET_RPC_URL_V10"
 block_id.tag = "latest"
 
 [[tool.snforge.fork]]
 name = "mainnet_3862592"
-url = "$MAINNET_RPC_URL"
+url = "$MAINNET_RPC_URL_V10"
 block_id.number = "3862592"
 
 [[tool.snforge.fork]]
 name = "mainnet_846087"
-url = "$MAINNET_RPC_URL"
+url = "$MAINNET_RPC_URL_V10"
 block_id.number = "846087"
 
 [[tool.snforge.fork]]
 name = "mainnet_630393"
-url = "$MAINNET_RPC_URL"
+url = "$MAINNET_RPC_URL_V10"
 block_id.number = "630393"
 
 [[tool.snforge.fork]]
 name = "mainnet_660943"
-url = "$MAINNET_RPC_URL"
+url = "$MAINNET_RPC_URL_V10"
 block_id.number = "660943"
 
 [[tool.snforge.fork]]
 name = "mainnet_661452"
-url = "$MAINNET_RPC_URL"
+url = "$MAINNET_RPC_URL_V10"
 block_id.number = "661452"
 
 [[tool.snforge.fork]]
 name = "mainnet_usdc_large"
-url = "$MAINNET_RPC_URL"
+url = "$MAINNET_RPC_URL_V10"
 block_id.number = "648429"
 
 [[tool.snforge.fork]]
 name = "mainnet_671812"
-url = "$MAINNET_RPC_URL"
+url = "$MAINNET_RPC_URL_V10"
 block_id.number = "671812"
 
 [[tool.snforge.fork]]
 name = "mainnet_1078313"
-url = "$MAINNET_RPC_URL"
+url = "$MAINNET_RPC_URL_V10"
 block_id.number = "1078313"
 
 [[tool.snforge.fork]]
 name = "mainnet_1025136"
-url = "$MAINNET_RPC_URL"
+url = "$MAINNET_RPC_URL_V10"
 block_id.number = "1025136"
 
 [[tool.snforge.fork]]
 name = "mainnet_971311"
-url = "$MAINNET_RPC_URL"
+url = "$MAINNET_RPC_URL_V10"
 block_id.number = "971311"
 
 [[tool.snforge.fork]]
 name = "mainnet_1134787"
-url = "$MAINNET_RPC_URL"
+url = "$MAINNET_RPC_URL_V10"
 block_id.number = "1134787"
 
 [[tool.snforge.fork]]
 name = "mainnet_1165999"
-url = "$MAINNET_RPC_URL"
+url = "$MAINNET_RPC_URL_V10"
 block_id.number = "1165999"
 
 [[tool.snforge.fork]]
 name = "mainnet_1256209"
-url = "$MAINNET_RPC_URL"
+url = "$MAINNET_RPC_URL_V10"
 block_id.number = "1256209"
 
 [[tool.snforge.fork]]
 name = "mainnet_1446151"
-url = "$MAINNET_RPC_URL"
+url = "$MAINNET_RPC_URL_V10"
 block_id.number = "1446151"
 
 [[tool.snforge.fork]]
 name = "mainnet_1531861"
-url = "$MAINNET_RPC_URL"
+url = "$MAINNET_RPC_URL_V10"
 block_id.number = "1531861"
 
 [profile.dev.cairo]

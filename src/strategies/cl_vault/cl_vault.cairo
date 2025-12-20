@@ -1,78 +1,104 @@
 #[starknet::contract]
 mod ConcLiquidityVault {
-    use core::option::OptionTrait;
-    use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess, Vec, VecTrait, MutableVecTrait};
-    use openzeppelin::security::pausable::{PausableComponent};
-    use openzeppelin::security::reentrancyguard::{ReentrancyGuardComponent};
-    use openzeppelin::upgrades::upgradeable::UpgradeableComponent;
-    use ekubo::types::pool_price::PoolPrice;
-    use ekubo::types::position::Position;
-    use ekubo::interfaces::mathlib::{IMathLibDispatcherTrait, dispatcher as ekuboLibDispatcher};
-    use ekubo::types::i129::i129;
+    use core::{
+        option::OptionTrait,
+    };
     use starknet::{
-        ContractAddress, contract_address_const, get_contract_address, get_caller_address,
-        get_block_number
+        storage::{StoragePointerReadAccess, StoragePointerWriteAccess, Vec, VecTrait, MutableVecTrait},
+        ContractAddress, get_contract_address, get_caller_address,
     };
-    use strkfarm_contracts::helpers::pow;
-    use openzeppelin::introspection::src5::SRC5Component;
-    use openzeppelin::token::erc20::{ERC20Component,};
-    use strkfarm_contracts::components::harvester::reward_shares::{
-        RewardShareComponent, IRewardShare
+    use openzeppelin::{
+        security::{
+            pausable::PausableComponent,
+            reentrancyguard::ReentrancyGuardComponent
+        },
+        upgrades::upgradeable::UpgradeableComponent,
+        introspection::src5::SRC5Component,
+        token::erc20::{
+            ERC20Component,
+            interface::IERC20Mixin,
+            ERC20HooksEmptyImpl
+        }
     };
-    use strkfarm_contracts::components::harvester::reward_shares::RewardShareComponent::{
-        InternalTrait as RewardShareInternalImpl
+    use ekubo::{
+        types::{
+            pool_price::PoolPrice,
+            position::Position,
+            i129::i129
+        },
+        interfaces::mathlib::{IMathLibDispatcherTrait, dispatcher as ekuboLibDispatcher}
     };
-    use strkfarm_contracts::components::harvester::harvester_lib::{
-        HarvestConfig, HarvestConfigImpl, HarvestHooksTrait
+    use strkfarm_contracts::{
+        helpers::{
+            pow,
+            ERC20Helper,
+            safe_decimal_math,
+            constants
+        },
+        components::{
+            harvester::{
+                harvester_lib::{
+                    HarvestConfig,
+                    HarvestConfigImpl,
+                    HarvestHooksTrait,
+                    HarvestBeforeHookResult
+                },
+                defi_spring_default_style::{
+                    SNFStyleClaimSettings,
+                    ClaimImpl as DefaultClaimImpl
+                },
+                defi_spring_ekubo_style::{
+                    EkuboStyleClaimSettings,
+                    ClaimImpl
+                }
+            },
+            common::CommonComp,
+            swap::{AvnuMultiRouteSwap, AvnuMultiRouteSwapImpl}
+        },
+        interfaces::{
+            oracle::IPriceOracleDispatcher,
+            IEkuboPosition::{IEkuboDispatcher, IEkuboDispatcherTrait},
+            IEkuboPositionsNFT::{IEkuboNFTDispatcher, IEkuboNFTDispatcherTrait},
+            IEkuboCore::{
+                IEkuboCoreDispatcher,
+                IEkuboCoreDispatcherTrait,
+                Bounds,
+                PositionKey,
+                PoolKey
+            },
+            IEkuboDistributor::Claim
+        },
+        strategies::cl_vault::interface::{
+            IClVault,
+            FeeSettings,
+            MyPosition,
+            ClSettings,
+            ManagedPool,
+            SqrtValues,
+            InitValues,
+            ManagedPoolField,
+            RebalanceParams
+        }
     };
-    use strkfarm_contracts::components::common::CommonComp;
-    use strkfarm_contracts::components::harvester::defi_spring_default_style::{
-        SNFStyleClaimSettings, ClaimImpl as DefaultClaimImpl
-    };
-    use strkfarm_contracts::components::harvester::harvester_lib::HarvestBeforeHookResult;
-    use strkfarm_contracts::helpers::ERC20Helper;
-    use strkfarm_contracts::interfaces::oracle::{IPriceOracleDispatcher};
-    use strkfarm_contracts::interfaces::IEkuboPosition::{IEkuboDispatcher, IEkuboDispatcherTrait};
-    use strkfarm_contracts::interfaces::IEkuboPositionsNFT::{
-        IEkuboNFTDispatcher, IEkuboNFTDispatcherTrait
-    };
-    use strkfarm_contracts::interfaces::IEkuboCore::{
-        IEkuboCoreDispatcher, IEkuboCoreDispatcherTrait, Bounds, PositionKey, PoolKey
-    };
-    use strkfarm_contracts::components::swap::{AvnuMultiRouteSwap, AvnuMultiRouteSwapImpl};
-    use strkfarm_contracts::interfaces::IEkuboDistributor::Claim;
-    use strkfarm_contracts::components::harvester::defi_spring_ekubo_style::{
-        EkuboStyleClaimSettings, ClaimImpl
-    };
-    use strkfarm_contracts::strategies::cl_vault::interface::{
-        IClVault, FeeSettings, MyPosition, ClSettings, 
-        ManagedPool, SqrtValues, InitValues, ManagedPoolField,
-        RangeInstruction, RebalanceParams
-    };
-    use strkfarm_contracts::helpers::safe_decimal_math;
-    use strkfarm_contracts::helpers::constants;
-    use core::num::traits::Zero;
 
     component!(path: ERC20Component, storage: erc20, event: ERC20Event);
     component!(path: SRC5Component, storage: src5, event: SRC5Event);
     component!(path: ReentrancyGuardComponent, storage: reng, event: ReentrancyGuardEvent);
     component!(path: UpgradeableComponent, storage: upgradeable, event: UpgradeableEvent);
     component!(path: PausableComponent, storage: pausable, event: PausableEvent);
+    // contains standard functions like pause/upgrade/permission assets etc.
     component!(path: CommonComp, storage: common, event: CommonCompEvent);
-    component!(path: RewardShareComponent, storage: reward_share, event: RewardShareEvent);
-    use openzeppelin::token::erc20::interface::IERC20Mixin;
 
     #[abi(embed_v0)]
-    impl RewardShareImpl = RewardShareComponent::RewardShareImpl<ContractState>;
-    impl RewardShare = RewardShareComponent::InternalImpl<ContractState>;
-    impl RewardSharePrivateImpl = RewardShareComponent::PrivateImpl<ContractState>;
+    impl ERC20MixinImpl = ERC20Component::ERC20MixinImpl<ContractState>;
 
     #[abi(embed_v0)]
     impl CommonCompImpl = CommonComp::CommonImpl<ContractState>;
+
+    // Internal impls
     impl CommonInternalImpl = CommonComp::InternalImpl<ContractState>;
     impl ERC20InternalImpl = ERC20Component::InternalImpl<ContractState>;
     impl ReentrancyGuardInternalImpl = ReentrancyGuardComponent::InternalImpl<ContractState>;
-
 
     #[derive(Drop, starknet::Event)]
     struct Deposit {
@@ -125,8 +151,6 @@ mod ConcLiquidityVault {
         pausable: PausableComponent::Storage,
         #[substorage(v0)]
         common: CommonComp::Storage,
-        #[substorage(v0)]
-        reward_share: RewardShareComponent::Storage,
         // constants
         ekubo_positions_contract: IEkuboDispatcher,
         ekubo_positions_nft: ContractAddress,
@@ -156,8 +180,6 @@ mod ConcLiquidityVault {
         PausableEvent: PausableComponent::Event,
         #[flat]
         CommonCompEvent: CommonComp::Event,
-        #[flat]
-        RewardShareEvent: RewardShareComponent::Event,
         Deposit: Deposit,
         Withdraw: Withdraw,
         Rebalance: Rebalance,
@@ -227,7 +249,6 @@ mod ConcLiquidityVault {
         assert(fee_settings.fee_bps <= 10000, 'invalid fee bps');
         self.fee_settings.write(fee_settings);
         self.is_incentives_on.write(true);
-        self.reward_share.init(get_block_number());
         assert(init_values.init0 != 0, 'invalid init0');
         assert(init_values.init1 != 0, 'invalid init1');
         self.init_values.write(init_values);
@@ -525,7 +546,7 @@ mod ConcLiquidityVault {
             let config = HarvestConfig {};
             // just dummy config, not used
             let snfSettings = SNFStyleClaimSettings {
-                rewardsContract: contract_address_const::<0>()
+                rewardsContract: 0.try_into().unwrap()
             };
 
             let rewardToken = constants::STRK_ADDRESS();
@@ -882,137 +903,8 @@ mod ConcLiquidityVault {
         }
     }
 
-    #[abi(embed_v0)]
-    impl VesuERC20Impl of IERC20Mixin<ContractState> {
-        fn total_supply(self: @ContractState) -> u256 {
-            let unminted_shares = self.reward_share.get_total_unminted_shares();
-            let total_supply: u256 = self.erc20.total_supply()
-                + unminted_shares.try_into().unwrap();
-
-            total_supply
-        }
-
-        fn balance_of(self: @ContractState, account: ContractAddress) -> u256 {
-            let (additional_shares, _, _) = self.reward_share.get_additional_shares(account);
-            self.erc20.balance_of(account) + additional_shares.into()
-        }
-
-        fn allowance(
-            self: @ContractState, owner: ContractAddress, spender: ContractAddress
-        ) -> u256 {
-            self.erc20.allowance(owner, spender)
-        }
-        fn transfer(ref self: ContractState, recipient: ContractAddress, amount: u256) -> bool {
-            self.erc20.transfer(recipient, amount)
-        }
-        fn transfer_from(
-            ref self: ContractState,
-            sender: ContractAddress,
-            recipient: ContractAddress,
-            amount: u256,
-        ) -> bool {
-            self.erc20.transfer_from(sender, recipient, amount)
-        }
-        fn approve(ref self: ContractState, spender: ContractAddress, amount: u256) -> bool {
-            self.erc20.approve(spender, amount)
-        }
-
-        fn name(self: @ContractState) -> ByteArray {
-            self.erc20.name()
-        }
-
-        fn symbol(self: @ContractState) -> ByteArray {
-            self.erc20.symbol()
-        }
-
-        fn decimals(self: @ContractState) -> u8 {
-            self.erc20.decimals()
-        }
-
-        fn totalSupply(self: @ContractState) -> u256 {
-            self.total_supply()
-        }
-
-        fn balanceOf(self: @ContractState, account: ContractAddress) -> u256 {
-            self.balance_of(account)
-        }
-
-        fn transferFrom(
-            ref self: ContractState,
-            sender: ContractAddress,
-            recipient: ContractAddress,
-            amount: u256,
-        ) -> bool {
-            self.transfer_from(sender, recipient, amount)
-        }
-    }
-
-    impl ERC20HooksImpl of ERC20Component::ERC20HooksTrait<ContractState> {
-        fn before_update(
-            ref self: ERC20Component::ComponentState<ContractState>,
-            from: ContractAddress,
-            recipient: ContractAddress,
-            amount: u256,
-        ) {
-            let mut state = self.get_contract_mut();
-            state._handle_reward_shares(from, amount, 0);
-        }
-
-        fn after_update(
-            ref self: ERC20Component::ComponentState<ContractState>,
-            from: ContractAddress,
-            recipient: ContractAddress,
-            amount: u256,
-        ) {
-            let mut state = self.get_contract_mut();
-            state._handle_reward_shares(recipient, 0, amount);
-        }
-    }
-
     #[generate_trait]
     pub impl InternalImpl of InternalTrait {
-        fn _handle_reward_shares(
-            ref self: ContractState,
-            from: ContractAddress,
-            unminted_shares: u256,
-            minted_shares: u256
-        ) {
-            if (from.is_zero()) {
-                return;
-            }
-
-            let (additional_shares, last_block, pending_round_points) = self
-                .reward_share
-                .get_additional_shares(from);
-
-            // settle any additional shares of the from address
-            let additional_u256: u256 = additional_shares.try_into().unwrap();
-            if (self.is_incentives_on.read()) {
-                let user_shares = self.erc20.balance_of(from);
-
-                // update rewards state for from address
-                let mut new_shares = user_shares + additional_u256 - unminted_shares;
-                let total_supply = self.total_supply() - minted_shares;
-                self
-                    .reward_share
-                    .update_user_rewards(
-                        from,
-                        new_shares.try_into().unwrap(),
-                        additional_shares,
-                        last_block,
-                        pending_round_points,
-                        total_supply.try_into().unwrap()
-                    );
-            }
-
-            if (additional_u256 > 0) {
-                // mint after updating rewards bcz mint will recursively call this hook
-                // and updating rewards will before         will make additional_shares 0
-                // and avoid calling mint again
-                self.erc20.mint(from, additional_shares.try_into().unwrap());
-            }
-        }
-
         fn get_sqrt_lower_upper(ref self: ContractState, bounds: Bounds) -> (u256, u256) {
             
             let sqrt_lower = ekuboLibDispatcher().tick_to_sqrt_ratio(bounds.lower);

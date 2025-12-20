@@ -3,18 +3,18 @@ version = 1
 
 [[package]]
 name = "alexandria_data_structures"
-version = "0.5.1"
-source = "git+https://github.com/keep-starknet-strange/alexandria.git?tag=v0.5.1#c804e98e6e9dc1677906bd65d44470615e42dabf"
+version = "0.8.0"
+source = "git+https://github.com/keep-starknet-strange/alexandria.git?tag=v0.8.0#cb290c4d3884aca23d450950e7f302ceebc98d16"
 
 [[package]]
 name = "alexandria_math"
-version = "0.5.1"
-source = "git+https://github.com/keep-starknet-strange/alexandria.git?tag=v0.5.1#c804e98e6e9dc1677906bd65d44470615e42dabf"
+version = "0.8.0"
+source = "git+https://github.com/keep-starknet-strange/alexandria.git?tag=v0.8.0#cb290c4d3884aca23d450950e7f302ceebc98d16"
 
 [[package]]
 name = "alexandria_storage"
-version = "0.5.1"
-source = "git+https://github.com/keep-starknet-strange/alexandria.git?tag=v0.5.1#c804e98e6e9dc1677906bd65d44470615e42dabf"
+version = "0.8.0"
+source = "git+https://github.com/keep-starknet-strange/alexandria.git?tag=v0.8.0#cb290c4d3884aca23d450950e7f302ceebc98d16"
 
 [[package]]
 name = "ekubo"
@@ -142,13 +142,13 @@ checksum = "sha256:fd348b31c4a4407add33adc3c2b8f26dca71dbd7431faaf726168f37a91db
 
 [[package]]
 name = "snforge_scarb_plugin"
-version = "0.46.0"
-source = "git+https://github.com/foundry-rs/starknet-foundry?tag=v0.46.0#8586208d79496a1ccca23b9211e4f6ac910a8070"
+version = "0.54.0"
+source = "git+https://github.com/foundry-rs/starknet-foundry?tag=v0.54.0#bc522a78a7fbfc18835b99c9c79d9427763ec288"
 
 [[package]]
 name = "snforge_std"
-version = "0.46.0"
-source = "git+https://github.com/foundry-rs/starknet-foundry?tag=v0.46.0#8586208d79496a1ccca23b9211e4f6ac910a8070"
+version = "0.54.0"
+source = "git+https://github.com/foundry-rs/starknet-foundry?tag=v0.54.0#bc522a78a7fbfc18835b99c9c79d9427763ec288"
 dependencies = [
  "snforge_scarb_plugin",
 ]
