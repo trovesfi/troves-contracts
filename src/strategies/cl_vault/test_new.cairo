@@ -387,7 +387,7 @@ pub mod test_cl_vault {
         ERC20Helper::approve(constants::STRK_ADDRESS(), clVault.contract_address, amount * 2);
         ERC20Helper::approve(constants::XSTRK_ADDRESS(), clVault.contract_address, amount * 2);
 
-        let expected_shares = clVault.convert_to_shares(amount, amount);
+        let _shares_info = clVault.convert_to_shares(amount, amount);
         let shares = clVault.deposit(amount, amount ,this);
         println!("assets deposited");
 
@@ -432,7 +432,7 @@ pub mod test_cl_vault {
         ERC20Helper::approve(constants::WST_ADDRESS(), clVault.contract_address, amount * 2);
         println!("approved");
 
-        let expected_shares = clVault.convert_to_shares(amount, amount);
+        let _shares_info = clVault.convert_to_shares(amount, amount);
         let shares = clVault.deposit(amount, amount ,this);
         println!("assets deposited");
 
@@ -803,8 +803,7 @@ pub mod test_cl_vault {
 
         let rebal_params = RebalanceParams {
             rebal: range_ins,
-            swap_params: swap_params,
-            is_swap: false
+            swap_params: swap_params
         };
 
         clVault.rebalance_pool(rebal_params);
@@ -1095,8 +1094,7 @@ pub mod test_cl_vault {
 
         let rebal_params = RebalanceParams {
             rebal: range_ins,
-            swap_params: swap_params,
-            is_swap: false
+            swap_params: swap_params
         };
 
         println!("////////////////////////////////////////////")
@@ -1420,8 +1418,7 @@ pub mod test_cl_vault {
 
         let rebal_params = RebalanceParams {
             rebal: range_ins,
-            swap_params: swap_params,
-            is_swap: false
+            swap_params: swap_params
         };
 
         /// println!("swap params ready");
@@ -1456,98 +1453,31 @@ pub mod test_cl_vault {
         clVault.set_settings(fee_settings);
     }
 
-    #[test]
-    #[fork("mainnet_latest")]
-    fn test_set_incentives_pass() {
-        let (clVault, _) = deploy_cl_vault();
+    // handle_unused method has been removed from the contract
+    // These tests are commented out as the functionality no longer exists
+    // #[test]
+    // #[fork("mainnet_latest")]
+    // #[should_panic(expected: ('invalid swap params [1]',))]
+    // fn test_handle_ununsed_invalid_from_token() {
+    //     let (clVault, _) = deploy_cl_vault();
+    //     // ... test code removed
+    // }
 
-        clVault.set_incentives_off();
-    }
+    // #[test]
+    // #[fork("mainnet_latest")]
+    // #[should_panic(expected: ('invalid swap params [2]',))]
+    // fn test_handle_ununsed_invalid_to_token() {
+    //     let (clVault, _) = deploy_cl_vault();
+    //     // ... test code removed
+    // }
 
-    #[test]
-    #[fork("mainnet_latest")]
-    #[should_panic(expected: ('Access: Missing governor role',))]
-    fn test_set_incentives_invalid_permissions() {
-        let (clVault, _) = deploy_cl_vault();
-
-        start_cheat_caller_address(clVault.contract_address, constants::EKUBO_USER_ADDRESS());
-        clVault.set_incentives_off();
-        stop_cheat_caller_address(clVault.contract_address);
-    }
-
-    #[test]
-    #[fork("mainnet_latest")]
-    #[should_panic(expected: ('invalid swap params [1]',))]
-    fn test_handle_ununsed_invalid_from_token() {
-        let (clVault, _) = deploy_cl_vault();
-
-        let mut strk_xstrk_route = get_strk_xstrk_route();
-        strk_xstrk_route.percent = 1000000000000;
-        let swap_params = AvnuMultiRouteSwap {
-            token_from_address: constants::ETH_ADDRESS(),
-            // got amont from trail and error
-            token_from_amount: 2744 * pow::ten_pow(18) / 1000,
-            token_to_address: strk_xstrk_route.token_to,
-            token_to_amount: 0,
-            token_to_min_amount: 0,
-            beneficiary: clVault.contract_address,
-            integrator_fee_amount_bps: 0,
-            integrator_fee_recipient: contract_address_const::<0x00>(),
-            routes: array![]
-        };
-        /// println!("swap params ready");
-        clVault.handle_unused(swap_params, 0);
-    }
-
-    #[test]
-    #[fork("mainnet_latest")]
-    #[should_panic(expected: ('invalid swap params [2]',))]
-    fn test_handle_ununsed_invalid_to_token() {
-        let (clVault, _) = deploy_cl_vault();
-
-        let mut eth_route = get_strk_xstrk_route();
-        eth_route.percent = 1000000000000;
-        let swap_params = AvnuMultiRouteSwap {
-            token_from_address: eth_route.clone().token_from,
-            // got amont from trail and error
-            token_from_amount: 2744 * pow::ten_pow(18) / 1000,
-            token_to_address: constants::ETH_ADDRESS(),
-            token_to_amount: 0,
-            token_to_min_amount: 0,
-            beneficiary: clVault.contract_address,
-            integrator_fee_amount_bps: 0,
-            integrator_fee_recipient: contract_address_const::<0x00>(),
-            routes: array![]
-        };
-        /// println!("swap params ready");
-        clVault.handle_unused(swap_params, 0);
-    }
-
-    #[test]
-    #[fork("mainnet_latest")]
-    #[should_panic(expected: ('Access: Missing relayer role',))]
-    fn test_handle_ununsed_no_auth() {
-        let (clVault, _) = deploy_cl_vault();
-
-        let mut strk_xstrk_route = get_strk_xstrk_route();
-        strk_xstrk_route.percent = 1000000000000;
-        let swap_params = AvnuMultiRouteSwap {
-            token_from_address: strk_xstrk_route.clone().token_from,
-            // got amont from trail and error
-            token_from_amount: 2744 * pow::ten_pow(18) / 1000,
-            token_to_address: constants::STRK_ADDRESS(),
-            token_to_amount: 0,
-            token_to_min_amount: 0,
-            beneficiary: clVault.contract_address,
-            integrator_fee_amount_bps: 0,
-            integrator_fee_recipient: contract_address_const::<0x00>(),
-            routes: array![]
-        };
-
-        start_cheat_caller_address(clVault.contract_address, constants::EKUBO_USER_ADDRESS());
-        clVault.handle_unused(swap_params, 0);
-        stop_cheat_caller_address(clVault.contract_address);
-    }
+    // #[test]
+    // #[fork("mainnet_latest")]
+    // #[should_panic(expected: ('Access: Missing relayer role',))]
+    // fn test_handle_ununsed_no_auth() {
+    //     let (clVault, _) = deploy_cl_vault();
+    //     // ... test code removed
+    // }
 
     fn STRKETHAvnuSwapInfo(amount: u256, beneficiary: ContractAddress) -> AvnuMultiRouteSwap {
         let additional1: Array<felt252> = array![
