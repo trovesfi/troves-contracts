@@ -299,7 +299,7 @@ pub mod test_vesu_rebalance {
     }
 
     #[test]
-    #[fork("mainnet_latest")]
+    #[fork("mainnet_1256209")]
     fn test_vesu_rebalance_action() {
         let amount = 5000 * pow::ten_pow(18);
         let this = get_contract_address();
@@ -385,7 +385,7 @@ pub mod test_vesu_rebalance {
 
     #[test]
     #[should_panic(expected: ('Insufficient yield',))]
-    #[fork("mainnet_latest")]
+    #[fork("mainnet_1256209")]
     fn test_vesu_rebalance_should_fail() {
         let amount = 1000 * pow::ten_pow(18);
         let this = get_contract_address();
@@ -445,7 +445,7 @@ pub mod test_vesu_rebalance {
 
     #[test]
     #[should_panic(expected: ('Access: Missing relayer role',))]
-    #[fork("mainnet_latest")]
+    #[fork("mainnet_1256209")]
     fn test_vesu_rebalance_should_fail_relayer_role() {
         let amount = 5000 * pow::ten_pow(18);
         let this = get_contract_address();
@@ -749,6 +749,9 @@ pub mod test_vesu_rebalance {
             >(),
             contract_address_const::<
                 0x072803e813eb69d9aaea1c458ed779569c81bde0a2fc03ea2869876d13fa08d4
+            >(),
+            contract_address_const::<
+                0x0150a0af5a972d0d0b4e6a87c21afe68f12dd4abcd7bc6f67cb49dbbec518238
             >(),
         ];
         start_cheat_caller_address(vault, timelock);

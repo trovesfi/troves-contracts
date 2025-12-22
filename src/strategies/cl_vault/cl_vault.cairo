@@ -1,110 +1,84 @@
 #[starknet::contract]
 mod ConcLiquidityVault {
-    use core::option::OptionTrait;
-    use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess,};
-    use openzeppelin::security::pausable::{PausableComponent};
-    use openzeppelin::security::reentrancyguard::{ReentrancyGuardComponent};
-    use openzeppelin::upgrades::upgradeable::UpgradeableComponent;
-    use ekubo::types::pool_price::PoolPrice;
-    use ekubo::types::position::Position;
-    use ekubo::interfaces::mathlib::{IMathLibDispatcherTrait, dispatcher as ekuboLibDispatcher};
-    use ekubo::types::i129::i129;
     use starknet::{
-        ContractAddress, contract_address_const, get_contract_address, get_caller_address,
-        get_block_number
+        storage::{StoragePointerReadAccess, StoragePointerWriteAccess, Vec, VecTrait, MutableVecTrait},
+        ContractAddress, get_contract_address, get_caller_address,
     };
-    use openzeppelin::introspection::src5::SRC5Component;
-    use openzeppelin::token::erc20::{ERC20Component,};
-    use strkfarm_contracts::components::harvester::reward_shares::{
-        RewardShareComponent, IRewardShare
+    use openzeppelin::{
+        security::{
+            pausable::PausableComponent,
+            reentrancyguard::ReentrancyGuardComponent
+        },
+        upgrades::upgradeable::UpgradeableComponent,
+        introspection::src5::SRC5Component,
+        token::erc20::{
+            ERC20Component,
+            ERC20HooksEmptyImpl,
+            interface::{
+                IERC20Mixin,
+                ERC20ABIDispatcher,
+                ERC20ABIDispatcherTrait
+            }
+        },
     };
-    use strkfarm_contracts::components::harvester::reward_shares::RewardShareComponent::{
-        InternalTrait as RewardShareInternalImpl
+    use ekubo::{
+        types::{
+            pool_price::PoolPrice,
+            position::Position,
+            i129::i129
+        },
+        interfaces::mathlib::{IMathLibDispatcherTrait, dispatcher as ekuboLibDispatcher}
     };
-    use strkfarm_contracts::components::harvester::harvester_lib::{
-        HarvestConfig, HarvestConfigImpl, HarvestHooksTrait
+    use strkfarm_contracts::{
+        helpers::{
+            pow,
+            ERC20Helper,
+        },
+        components::{
+            common::CommonComp,
+            swap::{AvnuMultiRouteSwap, AvnuMultiRouteSwapImpl}
+        },
+        interfaces::{
+            oracle::IPriceOracleDispatcher,
+            IEkuboPosition::{IEkuboDispatcher, IEkuboDispatcherTrait},
+            IEkuboPositionsNFT::{IEkuboNFTDispatcher, IEkuboNFTDispatcherTrait},
+            IEkuboCore::{
+                IEkuboCoreDispatcher,
+                IEkuboCoreDispatcherTrait,
+                Bounds,
+                PositionKey,
+                PoolKey
+            },
+            IEkuboDistributor::{
+                IEkuboDistributorDispatcherTrait, Claim, IEkuboDistributorDispatcher,
+            }
+        },
+        strategies::cl_vault::interface::{
+            *,
+            Events::*
+        },
     };
-    use strkfarm_contracts::components::common::CommonComp;
-    use strkfarm_contracts::components::harvester::defi_spring_default_style::{
-        SNFStyleClaimSettings, ClaimImpl as DefaultClaimImpl
-    };
-    use strkfarm_contracts::components::harvester::harvester_lib::HarvestBeforeHookResult;
-    use strkfarm_contracts::helpers::ERC20Helper;
-    use strkfarm_contracts::interfaces::oracle::{IPriceOracleDispatcher};
-    use strkfarm_contracts::interfaces::IEkuboPosition::{IEkuboDispatcher, IEkuboDispatcherTrait};
-    use strkfarm_contracts::interfaces::IEkuboPositionsNFT::{
-        IEkuboNFTDispatcher, IEkuboNFTDispatcherTrait
-    };
-    use strkfarm_contracts::interfaces::IEkuboCore::{
-        IEkuboCoreDispatcher, IEkuboCoreDispatcherTrait, Bounds, PoolKey, PositionKey
-    };
-    use strkfarm_contracts::components::swap::{AvnuMultiRouteSwap, AvnuMultiRouteSwapImpl};
-    use strkfarm_contracts::interfaces::IEkuboDistributor::Claim;
-    use strkfarm_contracts::components::harvester::defi_spring_ekubo_style::{
-        EkuboStyleClaimSettings, ClaimImpl
-    };
-    use strkfarm_contracts::strategies::cl_vault::interface::{
-        IClVault, FeeSettings, MyPosition, ClSettings
-    };
-    use strkfarm_contracts::helpers::safe_decimal_math;
-    use strkfarm_contracts::helpers::constants;
-    use core::num::traits::Zero;
 
     component!(path: ERC20Component, storage: erc20, event: ERC20Event);
     component!(path: SRC5Component, storage: src5, event: SRC5Event);
     component!(path: ReentrancyGuardComponent, storage: reng, event: ReentrancyGuardEvent);
     component!(path: UpgradeableComponent, storage: upgradeable, event: UpgradeableEvent);
     component!(path: PausableComponent, storage: pausable, event: PausableEvent);
+    // contains standard functions like pause/upgrade/permission assets etc.
     component!(path: CommonComp, storage: common, event: CommonCompEvent);
-    component!(path: RewardShareComponent, storage: reward_share, event: RewardShareEvent);
-    use openzeppelin::token::erc20::interface::IERC20Mixin;
 
     #[abi(embed_v0)]
-    impl RewardShareImpl = RewardShareComponent::RewardShareImpl<ContractState>;
-    impl RewardShare = RewardShareComponent::InternalImpl<ContractState>;
-    impl RewardSharePrivateImpl = RewardShareComponent::PrivateImpl<ContractState>;
+    impl ERC20MixinImpl = ERC20Component::ERC20MixinImpl<ContractState>;
 
     #[abi(embed_v0)]
     impl CommonCompImpl = CommonComp::CommonImpl<ContractState>;
+
+    // Internal impls
     impl CommonInternalImpl = CommonComp::InternalImpl<ContractState>;
     impl ERC20InternalImpl = ERC20Component::InternalImpl<ContractState>;
     impl ReentrancyGuardInternalImpl = ReentrancyGuardComponent::InternalImpl<ContractState>;
 
-
-    #[derive(Drop, starknet::Event)]
-    struct Deposit {
-        #[key]
-        sender: ContractAddress,
-        #[key]
-        owner: ContractAddress,
-        assets: u256,
-        shares: u256
-    }
-
-    #[derive(Drop, starknet::Event)]
-    struct Withdraw {
-        #[key]
-        sender: ContractAddress,
-        #[key]
-        receiver: ContractAddress,
-        #[key]
-        owner: ContractAddress,
-        assets: u256,
-        shares: u256
-    }
-
-    #[derive(Drop, Copy, starknet::Event)]
-    pub struct HarvestEvent {
-        #[key]
-        pub rewardToken: ContractAddress,
-        pub rewardAmount: u256,
-        #[key]
-        pub token0: ContractAddress,
-        pub token0Amount: u256,
-        #[key]
-        pub token1: ContractAddress,
-        pub token1Amount: u256
-    }
+    pub const SCALE_18: u256 = 1_000_000_000_000_000_000;
 
     #[storage]
     struct Storage {
@@ -120,22 +94,17 @@ mod ConcLiquidityVault {
         pausable: PausableComponent::Storage,
         #[substorage(v0)]
         common: CommonComp::Storage,
-        #[substorage(v0)]
-        reward_share: RewardShareComponent::Storage,
         // constants
         ekubo_positions_contract: IEkuboDispatcher,
-        pool_key: PoolKey,
         ekubo_positions_nft: ContractAddress,
         ekubo_core: ContractAddress,
         oracle: ContractAddress,
         // Changeable settings
-        bounds_settings: Bounds,
         fee_settings: FeeSettings,
+        managed_pools: Vec<ManagedPool>,
         // contract managed state
-        contract_nft_id: u64,
-        sqrt_lower: u256,
-        sqrt_upper: u256,
-        is_incentives_on: bool
+        sqrt_values: Vec<SqrtValues>, // sqrt values for each pool (same order as managed_pools)
+        init_values: InitValues, // initial ratios for token distribution, responsible for setting the mathematical order of shares for new vaults
     }
 
     #[event]
@@ -153,32 +122,14 @@ mod ConcLiquidityVault {
         PausableEvent: PausableComponent::Event,
         #[flat]
         CommonCompEvent: CommonComp::Event,
-        #[flat]
-        RewardShareEvent: RewardShareComponent::Event,
         Deposit: Deposit,
         Withdraw: Withdraw,
         Rebalance: Rebalance,
         HandleFees: HandleFees,
         FeeSettings: FeeSettings,
-        Harvest: HarvestEvent
-    }
-
-    #[derive(Drop, starknet::Event)]
-    pub struct Rebalance {
-        old_bounds: Bounds,
-        old_liquidity: u256,
-        new_bounds: Bounds,
-        new_liquidity: u256
-    }
-
-    #[derive(Drop, starknet::Event)]
-    pub struct HandleFees {
-        token0_addr: ContractAddress,
-        token0_origin_bal: u256,
-        token0_deposited: u256,
-        token1_addr: ContractAddress,
-        token1_origin_bal: u256,
-        token1_deposited: u256
+        Harvest: HarvestEvent,
+        PoolUpdated: PoolUpdated,
+        EkuboPositionUpdated: EkuboPositionUpdated,
     }
 
     #[constructor]
@@ -188,105 +139,108 @@ mod ConcLiquidityVault {
         symbol: ByteArray,
         access_control: ContractAddress,
         ekubo_positions_contract: ContractAddress,
-        bounds_settings: Bounds,
-        pool_key: PoolKey,
         ekubo_positions_nft: ContractAddress,
         ekubo_core: ContractAddress,
         oracle: ContractAddress,
         fee_settings: FeeSettings,
+        init_values: InitValues,
+        managed_pools: Array<ManagedPool>,
     ) {
         self.erc20.initializer(name, symbol);
         self.common.initializer(access_control);
         self
             .ekubo_positions_contract
             .write(IEkuboDispatcher { contract_address: ekubo_positions_contract });
-        self.set_sqrt_lower_upper(bounds_settings);
-        self.pool_key.write(pool_key);
+
+        // add all pools
+        assert(managed_pools.len() != 0, 'empty pool list');
+        let mut i = 0;
+        while i != managed_pools.len() {
+            let pool_ref = managed_pools.at(i);
+            self._modify_pool(*pool_ref, true);
+            i += 1;
+        }
+
         self.ekubo_positions_nft.write(ekubo_positions_nft);
         self.ekubo_core.write(ekubo_core);
         self.oracle.write(oracle);
+        assert(fee_settings.fee_bps <= 10000, 'invalid fee bps');
         self.fee_settings.write(fee_settings);
-        self.is_incentives_on.write(true);
-        self.reward_share.init(get_block_number());
+        assert(init_values.init0 != 0, 'invalid init0');
+        assert(init_values.init1 != 0, 'invalid init1');
+        self.init_values.write(init_values);
     }
 
     #[abi(embed_v0)]
     impl ExternalImpl of IClVault<ContractState> {
         /// @notice Deposits assets into the contract and mints corresponding shares.
-        /// @dev This function handles fees, calculates liquidity, mints shares,
-        /// and deposits assets into Ekubo. It ensures that the deposited liquidity
-        /// matches the expected amount.
-        /// @param amount0 The amount of the first asset to deposit.
-        /// @param amount1 The amount of the second asset to deposit.
-        /// @param receiver The address that will receive the minted shares.
-        /// @return shares The number of shares minted for the deposited liquidity.
         fn deposit(
             ref self: ContractState, amount0: u256, amount1: u256, receiver: ContractAddress
         ) -> u256 {
+            // 
             self.common.assert_not_paused();
             let caller: ContractAddress = get_caller_address();
             assert(amount0 > 0 || amount1 > 0, 'amounts cannot be zero');
-
-            self.handle_fees();
-
+            let shares = self._process_deposit(amount0, amount1);
             // mint shares
-            let liquidity = self._max_liquidity(amount0, amount1);
-            let shares = self._convert_to_shares(liquidity.into());
             self.erc20.mint(receiver, shares);
-
-            // deposit
-            let liquidity_actual = self._ekubo_deposit(caller, amount0, amount1, caller);
-            assert(liquidity == liquidity_actual, 'invalid liquidity added');
 
             self
                 .emit(
-                    Deposit { sender: caller, owner: receiver, assets: liquidity_actual, shares }
+                    Deposit { 
+                        sender: caller, 
+                        owner: receiver, 
+                        shares: shares,
+                        amount0: amount0, 
+                        amount1: amount1 
+                    }
                 );
             return shares;
         }
 
         /// @notice Withdraws assets by redeeming shares from the contract.
-        /// @dev This function ensures the caller has enough shares, calculates the assets to
-        /// withdraw, handles fees, removes liquidity from the pool, transfers the withdrawn assets
-        /// to the receiver, burns the shares, and updates the contract state accordingly.
-        /// @param shares The number of shares to redeem.
-        /// @param receiver The address that will receive the withdrawn assets.
-        /// @return position A struct containing the withdrawn liquidity, amount0, and amount1.
         fn withdraw(
             ref self: ContractState, shares: u256, receiver: ContractAddress
-        ) -> MyPosition {
+        ) -> MyPositions {
             self.common.assert_not_paused();
             let caller = get_caller_address();
 
             let max_shares = self.balance_of(caller);
             assert(shares <= max_shares, 'insufficient shares');
 
-            let userPosition = self.convert_to_assets(shares);
-            assert(userPosition.liquidity > 0, 'invalid liquidity removed');
-
-            self.handle_fees();
-
-            let pool_key = self.pool_key.read();
-            let old_liq = self.get_position().liquidity;
-
-            // withdraw
-            let (amt0, amt1) = self._withdraw_position(userPosition.liquidity.try_into().unwrap());
+            // read positions before burning shares for correct calc
+            let my_positions = self.convert_to_assets(shares);
 
             // burn shares
             self.erc20.burn(caller, shares);
 
-            // transfer proceeds to receiver
-            ERC20Helper::transfer(pool_key.token0, receiver, amt0.into());
-            ERC20Helper::transfer(pool_key.token1, receiver, amt1.into());
+            let mut i = 0;
+            let mut total_amount0 = 0;
+            let mut total_amount1 = 0;
+            while i != self.managed_pools.len() {
+                let pool = self.managed_pools[i].read();
+                self.handle_fees(i);
 
-            let current_liq = self.get_position().liquidity;
-            if (current_liq == 0) {
-                self.contract_nft_id.write(0);
+                // withdraw from ekubo
+                let position = *my_positions.positions.at(i.try_into().unwrap());
+                let (amt0, amt1) = self._withdraw_position(position.liquidity, i);
+                let TWO_POWER_128: u256 = 0x100000000000000000000000000000000;
+                let post_fee_factor = (1000000 - (pool.pool_key.fee.try_into().unwrap() * 1000000 / TWO_POWER_128));
+                let post_fee_amt0 = if (position.amount0 > 0) { position.amount0 * post_fee_factor / 1000000 - 1 } else { 0 };
+                let post_fee_amt1 = if (position.amount1 > 0) { position.amount1 * post_fee_factor / 1000000 - 1 } else { 0 };
+                assert(amt0.into() == post_fee_amt0, 'invalid amount0');
+                assert(amt1.into() == post_fee_amt1, 'invalid amount1');
+
+                total_amount0 += post_fee_amt0;
+                total_amount1 += post_fee_amt1;
+
+                i += 1;
             }
-            assert(
-                (old_liq - current_liq).into() == userPosition.liquidity,
-                'invalid liquidity removed'
-            );
+
+            // transfer proceeds to receiver
+            let pool_key = self.managed_pools[0].read().pool_key;
+            ERC20Helper::transfer(pool_key.token0, receiver, total_amount0);
+            ERC20Helper::transfer(pool_key.token1, receiver, total_amount1);
 
             self
                 .emit(
@@ -294,74 +248,115 @@ mod ConcLiquidityVault {
                         sender: caller,
                         receiver,
                         owner: receiver,
-                        assets: userPosition.liquidity,
-                        shares
+                        shares: shares,
+                        amount0: my_positions.total_amount0,
+                        amount1: my_positions.total_amount1
                     }
                 );
-            return MyPosition {
-                liquidity: userPosition.liquidity, amount0: amt0.into(), amount1: amt1.into()
-            };
+            return my_positions;
         }
 
         /// @notice Converts given asset amounts into the corresponding number of shares.
-        /// @dev This function calculates the maximum liquidity based on the provided asset amounts
-        ///      and then converts that liquidity into shares.
-        /// @param amount0 The amount of the first asset.
-        /// @param amount1 The amount of the second asset.
-        /// @return shares The number of shares corresponding to the provided asset amounts.
-        fn convert_to_shares(self: @ContractState, amount0: u256, amount1: u256) -> u256 {
-            let liquidity = self._max_liquidity(amount0, amount1);
-            return self._convert_to_shares(liquidity.into());
+        /// @dev no compulsion to use entire amount0 and amount1, can use partial amounts
+        fn convert_to_shares(self: @ContractState, amount0: u256, amount1: u256) -> SharesInfo {
+            self._convert_to_shares(amount0, amount1)
         }
 
         /// @notice Converts shares into the corresponding asset amounts.
-        /// @dev This function calculates the equivalent liquidity for the given shares,
-        ///      converts it to asset amounts using the current pool price, and ensures
-        ///      the calculated amounts are valid.
-        /// @param shares The number of shares to convert.
-        /// @return position A struct containing the corresponding liquidity, amount0, and amount1.
-        fn convert_to_assets(self: @ContractState, shares: u256) -> MyPosition {
-            let current_sqrt_price = self.get_pool_price().sqrt_ratio;
-            let liquidity = self._convert_to_assets(shares);
-            let delta = ekuboLibDispatcher()
-                .liquidity_delta_to_amount_delta(
-                    current_sqrt_price,
-                    i129 { mag: liquidity.try_into().unwrap(), sign: false },
-                    self.sqrt_lower.read(),
-                    self.sqrt_upper.read()
-                );
-            assert(delta.amount0.sign == false, 'invalid amount0');
-            assert(delta.amount1.sign == false, 'invalid amount1');
-            return MyPosition {
-                liquidity, amount0: delta.amount0.mag.into(), amount1: delta.amount1.mag.into()
+        /// @dev Proportionally convert shares to assets across all pools
+        fn convert_to_assets(self: @ContractState, shares: u256) -> MyPositions {
+            let mut i = 0;
+            let mut total_amount0 = 0;
+            let mut total_amount1 = 0;
+            let mut positions = ArrayTrait::<MyPosition>::new();
+            let supply = self.total_supply();
+            while i != self.managed_pools.len() {
+                let liquidity = self._convert_to_liquidity(shares, i, supply);
+                let (delta_amt0, delta_amt1) = self._calculate_liquidity_delta(i, liquidity);
+                
+                positions.append(MyPosition {
+                    liquidity: liquidity,
+                    amount0: delta_amt0.mag.into(),
+                    amount1: delta_amt1.mag.into(),
+                });
+                total_amount0 += delta_amt0.mag.into();
+                total_amount1 += delta_amt1.mag.into();
+                i += 1;
+            }
+            return MyPositions {
+                positions: positions,
+                total_amount0: total_amount0,
+                total_amount1: total_amount1
             };
         }
 
-        /// @notice Returns the total liquidity of the contract.
-        /// @dev This function retrieves the current position and returns its liquidity value.
-        /// @return liquidity The total liquidity in the contract.
-        fn total_liquidity(self: @ContractState) -> u256 {
-            let position = self.get_position();
-            position.liquidity.into()
+        /// @notice Returns the total ekubo liquidity of the pool.
+        fn total_liquidity_per_pool(self: @ContractState, pool_index: u64) -> u256 {
+            let pool = self.managed_pools[pool_index].read();
+            let position_key = PositionKey {
+                salt: pool.nft_id,
+                owner: self.ekubo_positions_contract.read().contract_address,
+                bounds: pool.bounds
+            };
+            let curr_position: Position = IEkuboCoreDispatcher {
+                contract_address: self.ekubo_core.read()
+            }
+                .get_position(pool.pool_key, position_key);
+
+            curr_position.liquidity.into()
+        }
+
+                /// @notice Retrieves the current position details from the Ekubo core contract.
+        /// @dev This function fetches the position data using the contract's position key
+        /// and pool key from the Ekubo core contract.
+        /// @return curr_position The current position details.
+        fn get_position(self: @ContractState, pool_index: u64) -> MyPosition {
+            let pool = self.managed_pools[pool_index].read();
+            let (range_amount0, range_amount1, range_liq) = self._get_range_amounts(pool);
+            MyPosition {
+                liquidity: range_liq.into(),
+                amount0: range_amount0.into(),
+                amount1: range_amount1.into(),
+            }
+        }
+
+        fn get_positions(self: @ContractState) -> MyPositions {
+            let mut positions = ArrayTrait::<MyPosition>::new();
+            let mut i = 0;
+            let mut total_amount0 = 0;
+            let mut total_amount1 = 0;
+            while i != self.managed_pools.len() {
+                let position = self.get_position(i);
+                positions.append(position);
+                total_amount0 += position.amount0;
+                total_amount1 += position.amount1;
+                i += 1;
+            }
+            MyPositions { 
+                positions: positions,
+                total_amount0: total_amount0,
+                total_amount1: total_amount1
+            }
         }
 
         /// @notice Collects and handles fees generated by the contract.
         /// @dev This function retrieves token balances, collects strategy fees, deposits
         /// collected fees back into the liquidity pool, and emits a fee-handling event.
-        fn handle_fees(ref self: ContractState) {
+        fn handle_fees(ref self: ContractState, pool_index: u64) {
             self.common.assert_not_paused();
+            let pool = self.managed_pools[pool_index].read();
             let this: ContractAddress = get_contract_address();
-            let poolInfo = self.pool_key.read();
-            let token0: ContractAddress = poolInfo.token0;
-            let token1: ContractAddress = poolInfo.token1;
+            let token0: ContractAddress = pool.pool_key.token0;
+            let token1: ContractAddress = pool.pool_key.token1;
 
-            let nft_id = self.contract_nft_id.read();
-            let bounds = self.bounds_settings.read();
+            let nft_id = pool.nft_id;
+            let bounds = pool.bounds;
             let positions_disp = self.ekubo_positions_contract.read();
-            let token_info = positions_disp.get_token_info(nft_id, poolInfo, bounds);
-
-            let (fee0, fee1) = self._collect_strat_fee();
-
+            
+            let token_info = positions_disp.get_token_info(nft_id, pool.pool_key, bounds);
+          
+            let (fee0, fee1) = self._collect_strat_fee(pool);
+            
             if (fee0 == 0 && fee1 == 0) {
                 return;
             }
@@ -370,10 +365,10 @@ mod ConcLiquidityVault {
             // @dev This action may leave some unused balances in the contract
             // Adjusting these amounts to exact required amounts unnecessarily
             // overcomplicates the logic and not of significant benefit
-            // - This is taken care during rebalance/handle_unused calls
+            // - This is taken care during rebalance calls
             // which we plan to run at regular intervals
             // (every fews days once or dependening on the amount of fee)
-            self._ekubo_deposit(this, fee0, fee1, this);
+            self._ekubo_deposit(this, fee0, fee1, this, pool_index);
 
             self
                 .emit(
@@ -383,18 +378,14 @@ mod ConcLiquidityVault {
                         token0_deposited: token_info.fees0.into(),
                         token1_addr: token1,
                         token1_origin_bal: token_info.amount1.into(),
-                        token1_deposited: token_info.fees1.into()
+                        token1_deposited: token_info.fees1.into(),
+                        pool_info: pool
                     }
                 );
         }
 
         /// @notice Harvests rewards from the specified rewards contract.
-        /// @dev This function claims rewards using the provided claim data and proof,
-        /// then swaps them based on the given swap information.
-        /// @param rewardsContract The contract address from which rewards are claimed.
-        /// @param claim The claim data for the rewards.
-        /// @param proof The Merkle proof verifying the claim.
-        /// @param swapInfo The swap information for converting harvested rewards.
+        /// reward token (e.g. STRK) -> token0 and token1 
         fn harvest(
             ref self: ContractState,
             rewardsContract: ContractAddress,
@@ -404,100 +395,57 @@ mod ConcLiquidityVault {
             swapInfo2: AvnuMultiRouteSwap
         ) {
             self.common.assert_not_paused();
-            assert(self.is_incentives_on.read(), 'incentives are off');
             self.common.assert_relayer_role();
 
-            let ekuboSettings = EkuboStyleClaimSettings { rewardsContract: rewardsContract, };
-            let config = HarvestConfig {};
-            // just dummy config, not used
-            let snfSettings = SNFStyleClaimSettings {
-                rewardsContract: contract_address_const::<0>()
-            };
+            // claim rewards
+            let (rewardToken, mut reward_amt) = self._ekubo_harvest(rewardsContract, claim, proof);
 
-            let rewardToken = constants::STRK_ADDRESS();
-            let pre_bal = ERC20Helper::balanceOf(rewardToken, get_contract_address());
-            config
-                .simple_harvest(
-                    ref self,
-                    ekuboSettings,
-                    claim,
-                    proof,
-                    snfSettings,
-                    swapInfo1.clone(), // doesnt do anything anyways
-                    IPriceOracleDispatcher { contract_address: self.oracle.read() }
-                );
-            let post_bal = ERC20Helper::balanceOf(rewardToken, get_contract_address());
+            // collect fees
+            let fee_settings = self.fee_settings.read();
+            let fee_amount = reward_amt * fee_settings.fee_bps / 10000;
+            if (fee_amount > 0) {
+                ERC20Helper::transfer(rewardToken, fee_settings.fee_collector, fee_amount);
+                reward_amt -= fee_amount;
+            }
 
             // validate swap info
             // aim to swap 100% of STRK into token0 and token1
-            let token0 = self.pool_key.read().token0;
-            let token1 = self.pool_key.read().token1;
+            let pool = self.managed_pools[0].read();
+            let token0 = pool.pool_key.token0;
+            let token1 = pool.pool_key.token1;
             assert(
-                swapInfo1.token_from_address == constants::STRK_ADDRESS(),
+                swapInfo1.token_from_address == rewardToken,
                 'invalid token from address [1]'
             );
             assert(swapInfo1.token_to_address == token0, 'invalid token to address [1]');
             assert(
-                swapInfo2.token_from_address == constants::STRK_ADDRESS(),
+                swapInfo2.token_from_address == rewardToken,
                 'invalid token from address [2]'
             );
             assert(swapInfo2.token_to_address == token1, 'invalid token to address [2]');
-            let strk_amt = post_bal - pre_bal;
-            assert(strk_amt > 0, 'No harvest amt');
+            assert(reward_amt > 0, 'No harvest amt');
             assert(
-                swapInfo1.token_from_amount + swapInfo2.token_from_amount == strk_amt,
-                'invalid STRK balance'
+                swapInfo1.token_from_amount + swapInfo2.token_from_amount == reward_amt,
+                'invalid reward token balance'
             );
 
             let mut token0_amt: u256 = swapInfo1.token_from_amount;
+            let oracle = self._get_oracle_dispatcher();
             if (swapInfo1.token_from_amount > 0
                 && swapInfo1.token_from_address != swapInfo1.token_to_address) {
-                token0_amt = swapInfo1
-                    .swap(IPriceOracleDispatcher { contract_address: self.oracle.read() });
+                token0_amt = swapInfo1.swap(oracle);
             }
             let mut token1_amt: u256 = swapInfo2.token_from_amount;
             if (swapInfo2.token_from_amount > 0
                 && swapInfo2.token_from_address != swapInfo2.token_to_address) {
-                token1_amt = swapInfo2
-                    .swap(IPriceOracleDispatcher { contract_address: self.oracle.read() });
+                    token1_amt = swapInfo2.swap(oracle);
             }
-
-            let bal0_pre = ERC20Helper::balanceOf(token0, get_contract_address());
-            let bal1_pre = ERC20Helper::balanceOf(token1, get_contract_address());
-            let expected_liquidity = self._max_liquidity(token0_amt, token1_amt);
-            let shares = self._convert_to_shares(expected_liquidity.into());
-            let new_liquidity = self
-                ._ekubo_deposit(
-                    get_contract_address(), token0_amt, token1_amt, get_contract_address()
-                );
-            assert(new_liquidity == expected_liquidity, 'invalid liquidity added');
-            let bal0_post = ERC20Helper::balanceOf(token0, get_contract_address());
-            let bal1_post = ERC20Helper::balanceOf(token1, get_contract_address());
-            let diff0 = token0_amt - (bal0_pre - bal0_post);
-            let diff1 = token1_amt - (bal1_pre - bal1_post);
-            assert(
-                safe_decimal_math::is_under_by_percent_bps(diff0, token0_amt, 1),
-                'invalid token0 amount'
-            );
-            assert(
-                safe_decimal_math::is_under_by_percent_bps(diff1, token1_amt, 1),
-                'invalid token1 amount'
-            );
-
-            let all_shares = self.total_supply();
-            self
-                .reward_share
-                .update_harvesting_rewards(
-                    new_liquidity.try_into().unwrap(),
-                    shares.try_into().unwrap(),
-                    all_shares.try_into().unwrap()
-                );
 
             self
                 .emit(
                     HarvestEvent {
-                        rewardToken: constants::STRK_ADDRESS(),
-                        rewardAmount: strk_amt,
+                        rewardToken: rewardToken,
+                        rewardAmount: reward_amt,
                         token0: token0,
                         token0Amount: token0_amt,
                         token1: token1,
@@ -506,63 +454,37 @@ mod ConcLiquidityVault {
                 );
         }
 
-        /// @notice Retrieves the position key associated with the contract.
-        /// @dev This function constructs and returns a `PositionKey` using the contract's
-        /// NFT ID, owner address, and bounds settings.
-        /// @return position_key The position key containing salt, owner, and bounds.
-        fn get_position_key(self: @ContractState) -> PositionKey {
-            let position_key = PositionKey {
-                salt: self.contract_nft_id.read(),
-                owner: self.ekubo_positions_contract.read().contract_address,
-                bounds: self.bounds_settings.read()
-            };
-
-            position_key
-        }
-
-        /// @notice Retrieves the current position details from the Ekubo core contract.
-        /// @dev This function fetches the position data using the contract's position key
-        /// and pool key from the Ekubo core contract.
-        /// @return curr_position The current position details.
-        fn get_position(self: @ContractState) -> Position {
-            let position_key: PositionKey = self.get_position_key();
-            let curr_position: Position = IEkuboCoreDispatcher {
-                contract_address: self.ekubo_core.read()
-            }
-                .get_position(self.pool_key.read(), position_key);
-
-            curr_position
-        }
-
-        /// @notice Retrieves the current settings of the contract.
-        /// @dev This function reads various contract settings including fee settings, bounds, pool
-        /// key, and oracle.
-        /// @return ClSettings Struct containing the contract's current settings.
-        fn get_settings(self: @ContractState) -> ClSettings {
+        /// @notice Retrieves the current settings of the contract + pool info
+        fn get_pool_settings(self: @ContractState, pool_index: u64) -> ClSettings {
+            let pool = self.managed_pools[pool_index].read();
             ClSettings {
                 ekubo_positions_contract: self.ekubo_positions_contract.read().contract_address,
-                bounds_settings: self.bounds_settings.read(),
-                pool_key: self.pool_key.read(),
+                bounds_settings: pool.bounds,
+                pool_key: pool.pool_key,
                 ekubo_positions_nft: self.ekubo_positions_nft.read(),
-                contract_nft_id: self.contract_nft_id.read(),
+                contract_nft_id: pool.nft_id,
                 ekubo_core: self.ekubo_core.read(),
                 oracle: self.oracle.read(),
                 fee_settings: self.fee_settings.read()
             }
         }
 
+        fn get_managed_pools(self: @ContractState) -> Array<ManagedPool> {
+            let mut pools = ArrayTrait::<ManagedPool>::new();
+            let mut i = 0;
+            while i != self.managed_pools.len() {
+                pools.append(self.managed_pools[i].read());
+                i += 1;
+            }
+
+            pools
+        }
+
         /// @notice Updates the fee settings of the contract.
-        /// @dev Only the contract owner can call this function to modify fee settings.
-        /// @param fee_settings The new fee settings to be applied.
         fn set_settings(ref self: ContractState, fee_settings: FeeSettings) {
             self.common.assert_governor_role();
             self.fee_settings.write(fee_settings);
             self.emit(fee_settings);
-        }
-
-        fn set_incentives_off(ref self: ContractState) {
-            self.common.assert_governor_role();
-            self.is_incentives_on.write(false);
         }
 
         /// @notice Rebalances the liquidity position based on new bounds.
@@ -570,220 +492,311 @@ mod ConcLiquidityVault {
         ///      updates the position bounds, and redeposits liquidity.
         /// @param new_bounds The new lower and upper tick bounds for the position.
         /// @param swap_params Parameters for swapping tokens to balance liquidity before redeposit.
-        fn rebalance(ref self: ContractState, new_bounds: Bounds, swap_params: AvnuMultiRouteSwap) {
+        fn rebalance_pool(ref self: ContractState, rebalance_params: RebalanceParams) {
             self.common.assert_relayer_role();
-            let tick_curr = self.get_pool_price().tick;
-            assert(new_bounds.lower <= tick_curr, 'invalid lower bound');
-            assert(new_bounds.upper >= tick_curr, 'invalid upper bound');
-            self._collect_strat_fee();
+            assert(rebalance_params.rebal.len().into() == self.managed_pools.len(), 'invalid rebal len');
+            // assert pool key checks
+            let mut i = 0;
 
-            // Withdraw liquidity
-            let old_bounds = self.bounds_settings.read();
-            let old_position = self.get_position();
-            self._withdraw_position(old_position.liquidity.into());
-            assert(self.get_position().liquidity == 0, 'invalid liquidity');
+            // assert same pool keys (intend to only rebalance between same pool keys)
+            while i != self.managed_pools.len() {
+                let stored_pool = self.managed_pools[i].read();
+                let input_pool_key = *rebalance_params.rebal.at(i.try_into().unwrap()).pool_key;
+        
+                assert(
+                    stored_pool.pool_key == input_pool_key,
+                    'pool_key mismatch'
+                );
+                i += 1;
+            }
 
-            // Update bounds
-            self.set_sqrt_lower_upper(new_bounds);
+            i = 0;
+            while i != self.managed_pools.len() {
+                let pool = self.managed_pools[i].read();
+                let rebal_params = *rebalance_params.rebal.at(i.try_into().unwrap());
 
-            // Handle unused balances and deposit
-            self.handle_unused(swap_params);
-            let new_position = self.get_position();
+                if (rebal_params.liquidity_burn == 0) {
+                    // no intent to withdraw liquidity
+                    i += 1;
+                    continue;
+                }
+
+                // assert liquidity to withdraw is valid
+                let pool_liq = self.total_liquidity_per_pool(pool_index: i);
+                if rebal_params.liquidity_burn > pool_liq.try_into().unwrap() {
+                    panic!("invalid liq remove at index {:?}", i);
+                }
+
+                let liq_to_withdraw = rebal_params.liquidity_burn.into();
+                self._withdraw_position(liq_to_withdraw, i);
+                i += 1;
+            }
+            
+            // swap
+            if rebalance_params.swap_params.token_from_amount > 0 {
+                rebalance_params.swap_params.swap(self._get_oracle_dispatcher());
+            }
+
+            // mint liquidity
+            i = 0;
+            let this = get_contract_address();
+            let caller = get_caller_address();
+            while i != self.managed_pools.len() {
+                let pool = self.managed_pools[i].read();
+                let rebal_params = *rebalance_params.rebal.at(i.try_into().unwrap());
+
+                if rebal_params.liquidity_mint == 0 {
+                    // no intent to mint liquidity
+                    i += 1;
+                    continue;
+                }
+
+                // update pool bounds (further computations depend on the new bounds)
+                let new_bounds = rebal_params.new_bounds;
+                self._set_pool_data(ManagedPoolField::Bounds(new_bounds), i);
+                self.sqrt_values[i].write(self._create_sqrt_values(new_bounds));
+
+                // assert sufficient token balances
+                let token0_bal = ERC20Helper::balanceOf(pool.pool_key.token0, this);
+                let token1_bal = ERC20Helper::balanceOf(pool.pool_key.token1, this);
+                let liquidity = rebal_params.liquidity_mint;
+                let (delta_amt0, delta_amt1) = self._calculate_liquidity_delta(i, (liquidity).into());
+                
+                if (token0_bal.try_into().unwrap() < delta_amt0.mag) {
+                    panic!("Rebalance: insufficient amt0 at index {:?}, required {:?}, available {:?}", i, delta_amt0.mag, token0_bal);
+                }
+                if (token1_bal.try_into().unwrap() < delta_amt1.mag) {
+                    panic!("Rebalance: insufficient amt1 at index {:?}, required {:?}, available {:?}", i, delta_amt1.mag, token1_bal);
+                }
+
+                self._ekubo_deposit(
+                    this, 
+                    delta_amt0.mag.into(), 
+                    delta_amt1.mag.into(),  
+                    this, 
+                    i
+                );
+
+                i += 1;
+            }
 
             self
                 .emit(
                     Rebalance {
-                        old_bounds,
-                        old_liquidity: old_position.liquidity.into(),
-                        new_bounds,
-                        new_liquidity: new_position.liquidity.into()
+                        actions: rebalance_params.rebal
                     }
                 );
         }
 
-        /// @notice Handles any unused token balances by swapping them before redepositing
-        /// liquidity.
-        /// @dev This function ensures that the majority of token balances are used efficiently
-        /// before deposit.
-        /// @param swap_params Parameters for swapping tokens to balance liquidity before redeposit.
-        fn handle_unused(ref self: ContractState, swap_params: AvnuMultiRouteSwap) {
-            self.common.assert_relayer_role();
-            let this = get_contract_address();
-            let pool_key = self.pool_key.read();
-            assert(
-                swap_params.token_from_address == pool_key.token0
-                    || swap_params.token_from_address == pool_key.token1,
-                'invalid swap params [1]'
+        fn add_pool(ref self: ContractState, pool: ManagedPool) {
+            self.common.assert_governor_role();
+            self._modify_pool(pool, true);
+        }
+
+        fn remove_pool(ref self: ContractState, pool_index: u64) {
+            self.common.assert_governor_role();
+            let pool = self.managed_pools[pool_index].read();
+            self._modify_pool(pool, false);
+        }
+
+        fn get_amount_delta(self: @ContractState, pool_index: u64, liquidity: u256) -> (u256, u256) {
+            let (delta_amt0, delta_amt1) = self._calculate_liquidity_delta(pool_index, liquidity);
+            (delta_amt0.mag.into(), delta_amt1.mag.into())
+        }
+
+        fn get_liquidity_delta(self: @ContractState, pool_index: u64, amount0: u256, amount1: u256) -> u128 {
+            let sqrt_values = self.sqrt_values[pool_index].read();
+            let liquidity_delta = ekuboLibDispatcher().max_liquidity(
+                self._get_pool_price(pool_index).sqrt_ratio,
+                sqrt_values.sqrt_lower,
+                sqrt_values.sqrt_upper,
+                amount0.try_into().unwrap(),
+                amount1.try_into().unwrap()
             );
-            assert(
-                swap_params.token_to_address == pool_key.token0
-                    || swap_params.token_to_address == pool_key.token1,
-                'invalid swap params [2]'
-            );
-
-            // Perform swap before deposit to adjust balances
-            swap_params.swap(IPriceOracleDispatcher { contract_address: self.oracle.read() });
-
-            // Deposit remaining balances
-            let token0_bal = ERC20Helper::balanceOf(pool_key.token0, this);
-            let token1_bal = ERC20Helper::balanceOf(pool_key.token1, this);
-            self._ekubo_deposit(this, token0_bal, token1_bal, this);
-
-            // Assert that most of the balance is used
-            let token0_bal_new = ERC20Helper::balanceOf(pool_key.token0, this);
-            let token1_bal_new = ERC20Helper::balanceOf(pool_key.token1, this);
-            assert(
-                safe_decimal_math::is_under_by_percent_bps(token0_bal_new, token0_bal, 1),
-                'invalid token0 balance'
-            );
-            assert(
-                safe_decimal_math::is_under_by_percent_bps(token1_bal_new, token1_bal, 1),
-                'invalid token1 balance'
-            );
-        }
-    }
-
-    #[abi(embed_v0)]
-    impl VesuERC20Impl of IERC20Mixin<ContractState> {
-        fn total_supply(self: @ContractState) -> u256 {
-            let unminted_shares = self.reward_share.get_total_unminted_shares();
-            let total_supply: u256 = self.erc20.total_supply()
-                + unminted_shares.try_into().unwrap();
-
-            total_supply
+            
+            return liquidity_delta;
         }
 
-        fn balance_of(self: @ContractState, account: ContractAddress) -> u256 {
-            let (additional_shares, _, _) = self.reward_share.get_additional_shares(account);
-            self.erc20.balance_of(account) + additional_shares.into()
+        fn get_fee_settings(self: @ContractState) -> FeeSettings {
+            self.fee_settings.read()
         }
 
-        fn allowance(
-            self: @ContractState, owner: ContractAddress, spender: ContractAddress
-        ) -> u256 {
-            self.erc20.allowance(owner, spender)
-        }
-        fn transfer(ref self: ContractState, recipient: ContractAddress, amount: u256) -> bool {
-            self.erc20.transfer(recipient, amount)
-        }
-        fn transfer_from(
-            ref self: ContractState,
-            sender: ContractAddress,
-            recipient: ContractAddress,
-            amount: u256,
-        ) -> bool {
-            self.erc20.transfer_from(sender, recipient, amount)
-        }
-        fn approve(ref self: ContractState, spender: ContractAddress, amount: u256) -> bool {
-            self.erc20.approve(spender, amount)
+        fn get_managed_pools_len(self: @ContractState) -> u64 {
+            self.managed_pools.len()
         }
 
-        fn name(self: @ContractState) -> ByteArray {
-            self.erc20.name()
-        }
-
-        fn symbol(self: @ContractState) -> ByteArray {
-            self.erc20.symbol()
-        }
-
-        fn decimals(self: @ContractState) -> u8 {
-            self.erc20.decimals()
-        }
-
-        fn totalSupply(self: @ContractState) -> u256 {
-            self.total_supply()
-        }
-
-        fn balanceOf(self: @ContractState, account: ContractAddress) -> u256 {
-            self.balance_of(account)
-        }
-
-        fn transferFrom(
-            ref self: ContractState,
-            sender: ContractAddress,
-            recipient: ContractAddress,
-            amount: u256,
-        ) -> bool {
-            self.transfer_from(sender, recipient, amount)
-        }
-    }
-
-    impl ERC20HooksImpl of ERC20Component::ERC20HooksTrait<ContractState> {
-        fn before_update(
-            ref self: ERC20Component::ComponentState<ContractState>,
-            from: ContractAddress,
-            recipient: ContractAddress,
-            amount: u256,
-        ) {
-            let mut state = self.get_contract_mut();
-            state._handle_reward_shares(from, amount, 0);
-        }
-
-        fn after_update(
-            ref self: ERC20Component::ComponentState<ContractState>,
-            from: ContractAddress,
-            recipient: ContractAddress,
-            amount: u256,
-        ) {
-            let mut state = self.get_contract_mut();
-            state._handle_reward_shares(recipient, 0, amount);
+        fn get_managed_pool(self: @ContractState, index: u64) -> ManagedPool {
+            self.managed_pools[index].read()
         }
     }
 
     #[generate_trait]
     pub impl InternalImpl of InternalTrait {
-        fn _handle_reward_shares(
-            ref self: ContractState,
-            from: ContractAddress,
-            unminted_shares: u256,
-            minted_shares: u256
-        ) {
-            if (from.is_zero()) {
-                return;
+        fn get_sqrt_lower_upper(ref self: ContractState, bounds: Bounds) -> (u256, u256) {
+            let sqrt_lower = ekuboLibDispatcher().tick_to_sqrt_ratio(bounds.lower);
+            let sqrt_upper = ekuboLibDispatcher().tick_to_sqrt_ratio(bounds.upper);
+            (sqrt_lower, sqrt_upper)
+        }
+
+        fn _create_sqrt_values(ref self: ContractState, bounds: Bounds) -> SqrtValues {
+            let (sqrt_lower, sqrt_upper) = self.get_sqrt_lower_upper(bounds);
+            SqrtValues { sqrt_lower: sqrt_lower, sqrt_upper: sqrt_upper }
+        }
+
+        fn _is_valid_token_pair(self: @ContractState, pool_key1: PoolKey, pool_key2: PoolKey) -> bool {
+            let is_token0_equal = pool_key1.token0 == pool_key2.token0;
+            let is_token1_equal = pool_key1.token1 == pool_key2.token1;
+            return is_token0_equal && is_token1_equal;
+        }
+
+        fn _ekubo_harvest(ref self: ContractState, rewardsContract: ContractAddress, claim: Claim, proof: Span<felt252>) -> (ContractAddress, u256) {
+            let distributor: IEkuboDistributorDispatcher = IEkuboDistributorDispatcher {
+                contract_address: rewardsContract
+            };
+            let rewardToken: ContractAddress = distributor.get_token().contract_address;
+            let rewardTokenDisp = ERC20ABIDispatcher { contract_address: rewardToken };
+    
+            if (proof.len() == 0) {
+                return (rewardToken, 0);
             }
+    
+            let this = get_contract_address();
+            let pre_bal = rewardTokenDisp.balanceOf(this);
+            distributor.claim(claim, proof);
+            let post_bal = rewardTokenDisp.balanceOf(this);
+    
+            // claim may not be exactly as requested, so we do bal diff check
+            let amount = (post_bal - pre_bal);
+            assert(amount > 0, 'No harvest');
 
-            let (additional_shares, last_block, pending_round_points) = self
-                .reward_share
-                .get_additional_shares(from);
+            (rewardToken, amount)
+        }
 
-            // settle any additional shares of the from address
-            let additional_u256: u256 = additional_shares.try_into().unwrap();
-            if (self.is_incentives_on.read()) {
-                let user_shares = self.erc20.balance_of(from);
+        fn _find_pool_index(
+            self: @ContractState,
+            pool_key: PoolKey,
+            bounds: Bounds
+        ) -> Option<u64> {
+            let mut i = 0;
+            while i != self.managed_pools.len() {
+                let pool = self.managed_pools[i].read();
+                if pool.pool_key == pool_key
+                    && pool.bounds == bounds
+                {
+                    return Option::Some(i);
+                }
+                i += 1;
+            }
+            Option::None
+        }
 
-                // update rewards state for from address
-                let mut new_shares = user_shares + additional_u256 - unminted_shares;
-                let total_supply = self.total_supply() - minted_shares;
-                self
-                    .reward_share
-                    .update_user_rewards(
-                        from,
-                        new_shares.try_into().unwrap(),
-                        additional_shares,
-                        last_block,
-                        pending_round_points,
-                        total_supply.try_into().unwrap()
+        fn _modify_pool(ref self: ContractState, pool: ManagedPool, is_add: bool) {
+            if is_add {
+                // Add pool logic
+                // Check pool doesn't already exist
+                let existing_index = self._find_pool_index(pool.pool_key, pool.bounds);
+                assert(existing_index.is_none(), 'pool already exists');
+
+                // Validate tokens match first pool
+                if self.managed_pools.len() > 0 {
+                    let pool1 = self.managed_pools[0].read();
+                    assert(self._is_valid_token_pair(pool1.pool_key, pool.pool_key), 'invalid token pair');
+                }
+
+                // Add pool and calculate sqrt values
+                self.managed_pools.push(pool);
+                self.sqrt_values.push(self._create_sqrt_values(pool.bounds));
+
+                // Emit event
+                self.emit(
+                    PoolUpdated {
+                        pool_key: pool.pool_key,
+                        bounds: pool.bounds,
+                        pool_index: self.managed_pools.len() - 1,
+                        is_add: true
+                    }
+                );
+            } else {
+                // Remove pool logic
+                // Find pool index
+                let pool_index_opt = self._find_pool_index(pool.pool_key, pool.bounds);
+                assert(pool_index_opt.is_some(), 'pool does not exist');
+                let pool_index = pool_index_opt.unwrap();
+
+                // Check liquidity is zero
+                let position_liquidity = self.total_liquidity_per_pool(pool_index);
+                assert(position_liquidity == 0, 'liquidity must be zero');
+
+                // Swap with last element
+                let last_index = self.managed_pools.len() - 1;
+                let last_pool = self.managed_pools[last_index].read();
+                let last_sqrt = self.sqrt_values[last_index].read();
+                if pool_index != last_index {
+                    self.managed_pools[pool_index].write(last_pool);
+                    self.sqrt_values[pool_index].write(last_sqrt);
+
+                    self.emit(
+                        PoolUpdated {
+                            pool_key: pool.pool_key,
+                            bounds: pool.bounds,
+                            pool_index: pool_index,
+                            is_add: false
+                        }
                     );
-            }
 
-            if (additional_u256 > 0) {
-                // mint after updating rewards bcz mint will recursively call this hook
-                // and updating rewards will before will make additional_shares 0
-                // and avoid calling mint again
-                self.erc20.mint(from, additional_shares.try_into().unwrap());
+                    // since its a swap, we need to emit the addition of the last pool
+                    // and removal event below
+                    self.emit(
+                        PoolUpdated {
+                            pool_key: last_pool.pool_key,
+                            bounds: last_pool.bounds,
+                            pool_index: pool_index,
+                            is_add: true
+                        }
+                    );
+                }
+
+                // Remove last element
+                self.managed_pools.pop();
+                self.sqrt_values.pop();
+
+                // emit removal of last pool
+                self.emit(
+                    PoolUpdated {
+                        pool_key: last_pool.pool_key,
+                        bounds: last_pool.bounds,
+                        pool_index: last_index,
+                        is_add: false
+                    }
+                );
             }
         }
 
-        fn set_sqrt_lower_upper(ref self: ContractState, bounds: Bounds) -> (u256, u256) {
-            self.bounds_settings.write(bounds);
+        fn _set_pool_data(ref self: ContractState, field: ManagedPoolField, pool_index: u64) {
+            let curr_pool = self.managed_pools[pool_index].read();
+            let mut updated = curr_pool;
+            match field {
+                ManagedPoolField::Bounds(bounds) => {
+                    updated.bounds = bounds;
+                },
+                ManagedPoolField::NftId(nft_id) => {
+                    updated.nft_id = nft_id;
+                },
+            };
+            self.managed_pools[pool_index].write(updated);
+        }
 
-            // we compute sqrt_lower and sqrt_upper when bounds are set and store them in storage
-            // would be efficient.
-            let sqrt_lower = ekuboLibDispatcher().tick_to_sqrt_ratio(bounds.lower);
-            let sqrt_upper = ekuboLibDispatcher().tick_to_sqrt_ratio(bounds.upper);
-            self.sqrt_lower.write(sqrt_lower);
-            self.sqrt_upper.write(sqrt_upper);
-            (sqrt_lower, sqrt_upper)
+        fn _get_range_amounts(self: @ContractState, pool: ManagedPool) -> (u128, u128, u128) {
+            let positions_disp = self.ekubo_positions_contract.read();
+            if pool.nft_id == 0 {
+                return (0, 0, 0);
+            }
+            let pool_info = positions_disp.get_token_info(pool.nft_id, pool.pool_key, pool.bounds);
+            let range_amount0 = pool_info.amount0;
+            let range_amount1 = pool_info.amount1;
+            let range_liq = pool_info.liquidity;
+
+            (range_amount0, range_amount1, range_liq)
         }
 
         fn _pay_ekubo(
@@ -798,23 +811,101 @@ mod ConcLiquidityVault {
             }
         }
 
-        fn get_pool_price(self: @ContractState) -> PoolPrice {
+        fn _get_pool_price(self: @ContractState, pool_index: u64) -> PoolPrice {
             let disp = self.ekubo_positions_contract.read();
-            return disp.get_pool_price(self.pool_key.read());
+            let pool = self.managed_pools[pool_index].read();
+            return disp.get_pool_price(pool.pool_key);
         }
 
-        fn _withdraw_position(ref self: ContractState, liquidity: u256) -> (u128, u128) {
+        fn _get_oracle_dispatcher(self: @ContractState) -> IPriceOracleDispatcher {
+            IPriceOracleDispatcher { contract_address: self.oracle.read() }
+        }
+
+        fn _calculate_liquidity_delta(
+            self: @ContractState,
+            pool_index: u64,
+            liquidity: u256
+        ) -> (i129, i129) {
+            let current_sqrt_price = self._get_pool_price(pool_index).sqrt_ratio;
+            let delta = ekuboLibDispatcher()
+                .liquidity_delta_to_amount_delta(
+                    current_sqrt_price,
+                    i129 { mag: liquidity.try_into().unwrap(), sign: false },
+                    self.sqrt_values[pool_index].read().sqrt_lower,
+                    self.sqrt_values[pool_index].read().sqrt_upper
+                );
+            (delta.amount0, delta.amount1)
+        }
+
+        fn _calculate_initial_shares(
+            self: @ContractState,
+            amount0: u256,
+            amount1: u256,
+        ) -> u256 {
+            let pool = self.managed_pools[0].read();
+            let dec0 = ERC20Helper::decimals(pool.pool_key.token0);
+            let dec1 = ERC20Helper::decimals(pool.pool_key.token1);
+            let scale0: u256 = pow::ten_pow(18 - dec0.into());
+            let scale1: u256 = pow::ten_pow(18 - dec1.into());
+
+            // normalize incoming amounts
+            let amount0_n = amount0 * scale0;
+            let amount1_n = amount1 * scale1;
+
+            let init = self.init_values.read();
+            let shares0 = if init.init0 > 0 {
+                amount0_n * SCALE_18 / init.init0
+            } else { 0 };
+            let shares1 = if init.init1 > 0 {
+                amount1_n * SCALE_18 / init.init1
+            } else { 0 };
+            (shares0 + shares1) / 2
+        }
+
+        fn _withdraw_position(ref self: ContractState, liquidity: u256, pool_index: u64) -> (u128, u128) {
             let disp = self.ekubo_positions_contract.read();
-            return disp
+            let pool = self.managed_pools[pool_index].read();
+            let old_liq = self.total_liquidity_per_pool(pool_index);
+            let (amount0, amount1) = disp
                 .withdraw(
-                    self.contract_nft_id.read(),
-                    self.pool_key.read(),
-                    self.bounds_settings.read(),
+                    pool.nft_id,
+                    pool.pool_key,
+                    pool.bounds,
                     liquidity.try_into().unwrap(),
                     0x00,
                     0x00,
                     false
                 );
+
+            let current_liq = self.total_liquidity_per_pool(pool_index);
+            
+            if current_liq == 0 {
+                self.managed_pools[pool_index].write(
+                    ManagedPool {
+                        pool_key: pool.pool_key,
+                        bounds: pool.bounds,
+                        nft_id: 0
+                    }
+                );
+            }
+
+            if (old_liq - current_liq).into() != liquidity {
+                let diff: felt252 = old_liq.try_into().unwrap() - current_liq.try_into().unwrap();
+                panic!("invalid liquidity removed for index {:?} and diff {:?}", pool_index, diff);
+            }
+
+            self.emit(
+                EkuboPositionUpdated {
+                    nft_id: pool.nft_id,
+                    pool_key: pool.pool_key,
+                    bounds: pool.bounds,
+                    amount0_delta: i129{ mag: amount0.try_into().unwrap(), sign: true },
+                    amount1_delta: i129{ mag: amount1.try_into().unwrap(), sign: true },
+                    liquidity_delta: i129{ mag: liquidity.try_into().unwrap(), sign: true }
+                }
+            );
+
+            (amount0, amount1)
         }
 
         // @returns liquidity
@@ -823,9 +914,11 @@ mod ConcLiquidityVault {
             sender: ContractAddress,
             amount0: u256,
             amount1: u256,
-            receiver: ContractAddress
-        ) -> u256 {
-            let pool_key = self.pool_key.read();
+            receiver: ContractAddress,
+            pool_index: u64 
+        ) {
+            let pool = self.managed_pools[pool_index].read();
+            let pool_key = pool.pool_key;
             let token0 = pool_key.token0;
             let token1 = pool_key.token1;
             let positions_disp = self.ekubo_positions_contract.read();
@@ -834,37 +927,53 @@ mod ConcLiquidityVault {
             self._pay_ekubo(sender, token0, amount0);
             self._pay_ekubo(sender, token1, amount1);
 
-            let liq_before_deposit = self.get_position().liquidity;
-            let nft_id = self.contract_nft_id.read();
+            let mut initial_position = MyPosition {
+                liquidity: 0,
+                amount0: 0,
+                amount1: 0
+            };
+  
+            let nft_id = pool.nft_id;
             if nft_id == 0 {
                 let nft_id: u64 = IEkuboNFTDispatcher {
                     contract_address: self.ekubo_positions_nft.read()
                 }
                     .get_next_token_id();
-                self.contract_nft_id.write(nft_id);
+                self._set_pool_data(ManagedPoolField::NftId(nft_id), pool_index);
                 positions_disp
-                    .mint_and_deposit(self.pool_key.read(), self.bounds_settings.read(), 0);
+                    .mint_and_deposit(pool.pool_key, pool.bounds, 0);
             } else {
+                initial_position = self.get_position(pool_index);
                 positions_disp
-                    .deposit(nft_id, self.pool_key.read(), self.bounds_settings.read(), 0);
+                    .deposit(nft_id, pool.pool_key, pool.bounds, 0);
             }
+            
             // clear any unused tokens and send to receiver
             positions_disp.clear_minimum_to_recipient(token0, 0, receiver);
             positions_disp.clear_minimum_to_recipient(token1, 0, receiver);
 
-            let liq_after_deposit = self.get_position().liquidity;
-            return (liq_after_deposit - liq_before_deposit).into();
+            let final_position = self.get_position(pool_index);
+            self.emit(
+                EkuboPositionUpdated {
+                    nft_id: nft_id,
+                    pool_key: pool.pool_key,
+                    bounds: pool.bounds,
+                    amount0_delta: i129{ mag: (final_position.amount0 - initial_position.amount0).try_into().unwrap(), sign: false },
+                    amount1_delta: i129{ mag: (final_position.amount1 - initial_position.amount1).try_into().unwrap(), sign: false },
+                    liquidity_delta: i129{ mag: (final_position.liquidity - initial_position.liquidity).try_into().unwrap(), sign: false }
+                }
+            );
         }
 
-        fn _collect_strat_fee(ref self: ContractState) -> (u256, u256) {
+        fn _collect_strat_fee(ref self: ContractState, pool: ManagedPool) -> (u256, u256) {
             // collect fees from ekubo positions
-            let nft_id = self.contract_nft_id.read();
+            let nft_id = pool.nft_id;
             if (nft_id == 0) {
                 return (0, 0);
             }
 
-            let pool_key = self.pool_key.read();
-            let bounds = self.bounds_settings.read();
+            let pool_key = pool.pool_key;
+            let bounds = pool.bounds;
             let token0 = pool_key.token0;
             let token1 = pool_key.token1;
             let (fee0, fee1) = self
@@ -872,9 +981,10 @@ mod ConcLiquidityVault {
                 .read()
                 .collect_fees(nft_id, pool_key, bounds);
 
-            // compute our fee share
             let fee_settings = self.fee_settings.read();
-            let bps = fee_settings.fee_bps;
+            
+            let bps =
+            fee_settings.fee_bps;
             let collector = fee_settings.fee_collector;
             let fee_eth = (fee0.into() * bps) / 10000;
             let fee_wst_eth = (fee1.into() * bps) / 10000;
@@ -885,58 +995,203 @@ mod ConcLiquidityVault {
 
             // return remaining amounts
             (fee0.into() - fee_eth, fee1.into() - fee_wst_eth)
-        }
+        }   
 
-        fn _convert_to_shares(self: @ContractState, liquidity: u256) -> u256 {
-            let supply = self.total_supply();
-            if (supply == 0) {
-                return liquidity;
+        fn _process_deposit(
+            ref self: ContractState,
+            amount0: u256,
+            amount1: u256,
+        ) -> u256 {
+            let caller = get_caller_address();
+            assert(amount0 > 0 || amount1 > 0, 'zero deposit');
+
+            let SharesInfo { shares, user_level_positions: _, vault_level_positions } = self._convert_to_shares(amount0, amount1);
+            assert(shares > 0, 'zero shares');
+
+            let total_supply = self.total_supply();
+            if total_supply > 0 {
+                assert(vault_level_positions.total_amount0 > 0 || vault_level_positions.total_amount1 > 0, 'empty vault');
             }
-            let position = self.get_position();
-            let total_liquidity = position.liquidity;
-            return (liquidity * supply) / total_liquidity.into();
-        }
 
-        fn _convert_to_assets(self: @ContractState, shares: u256) -> u256 {
-            let supply = self.total_supply();
-            if (supply == 0) {
+            if (total_supply == 0) {
+                // vault positions can be 0 if total supply is 0, else == managed_pools.len()
+                assert(vault_level_positions.positions.len() == 0, 'unexpected flow');
+
+                // simply transfer funds to this
+                let this = get_contract_address();
+                let pool0 = self.managed_pools[0].read();
+                ERC20Helper::transfer_from(pool0.pool_key.token0, caller, this, amount0);
+                ERC20Helper::transfer_from(pool0.pool_key.token1, caller, this, amount1);
                 return shares;
+            } else {
+                assert(vault_level_positions.positions.len() == self.managed_pools.len().try_into().unwrap(), 'unexpected flow');
             }
 
-            let position = self.get_position();
-            let total_liquidity = position.liquidity;
-            return (shares * total_liquidity.into()) / supply;
-        }
-
-        fn _max_liquidity(self: @ContractState, amount0: u256, amount1: u256) -> u256 {
-            let current_sqrt_price = self.get_pool_price().sqrt_ratio;
-            let liquidity = ekuboLibDispatcher()
-                .max_liquidity(
-                    current_sqrt_price,
-                    self.sqrt_lower.read(),
-                    self.sqrt_upper.read(),
-                    amount0.try_into().unwrap(),
-                    amount1.try_into().unwrap()
+            // deposit funds to ekubo
+            let mut i = 0;
+            while i != self.managed_pools.len() {
+                self.handle_fees(i); // optional
+                
+                let position = *vault_level_positions.positions.at(i.try_into().unwrap());
+                self._ekubo_deposit(
+                    caller,
+                    position.amount0,
+                    position.amount1,
+                    caller,
+                    i
                 );
-            return liquidity.into();
-        }
-    }
+                i += 1;
+            } 
 
-    /// hooks defining before and after actions for the harvest function
-    impl HarvestHooksImpl of HarvestHooksTrait<ContractState> {
-        fn before_update(ref self: ContractState) -> HarvestBeforeHookResult {
-            // dont do any swap here
-            // returning STRK address will do nothing, just claim STRK and leaves it
-            // The handling is anyways done in the harvest function after simple_harvest call
-            HarvestBeforeHookResult { baseToken: constants::STRK_ADDRESS() }
+            return shares;
         }
 
-        fn after_update(ref self: ContractState, token: ContractAddress, amount: u256) {
-            let fee_amount = amount * self.fee_settings.read().fee_bps / 10000;
-            if (fee_amount > 0) {
-                ERC20Helper::transfer(token, self.fee_settings.read().fee_collector, fee_amount);
+        /// @notice Converts given liquidity into shares.
+        /// returns shares, user_level_positions, vault_level_positions
+        fn _convert_to_shares(self: @ContractState, amount0: u256, amount1: u256) -> SharesInfo {
+            let mut i = 0;
+            let mut vault_total_amount0: u256 = 0;
+            let mut vault_total_amount1: u256 = 0;
+            let mut ranges = ArrayTrait::<MyPosition>::new();
+
+            let total_supply = self.total_supply();
+
+            // compute total amounts spread across all pools
+            // - We shall divide user amounts proportionally to the range amounts
+            while i != self.managed_pools.len() {
+                let pool = self.managed_pools[i].read();
+                let (range_amt0, range_amt1, range_liq) = self._get_range_amounts(pool);
+                vault_total_amount0 += range_amt0.into();
+                vault_total_amount1 += range_amt1.into();
+                ranges.append(MyPosition {
+                    liquidity: range_liq.into(),
+                    amount0: range_amt0.into(),
+                    amount1: range_amt1.into(),
+                });
+
+                // use pool 0 as ref liquidity to calculate shares
+                if (i == 0 && range_liq == 0 && total_supply > 0) {
+                    panic!("pool 0 has no liquidity");
+                }
+
+                i += 1;
             }
-            // leave the rest in the contract, will be handled by the harvest function
+
+            let mut user_total_amount0 = 0_u256;
+            let mut user_total_amount1 = 0_u256;
+            let mut user_positions = ArrayTrait::<MyPosition>::new();
+
+            if (total_supply == 0) {
+                let shares = self._calculate_initial_shares(
+                    amount0,
+                    amount1,
+                );
+                // positions would be empty and zero amounts
+                return SharesInfo {
+                    shares: shares,
+                    user_level_positions: MyPositions {
+                        positions: user_positions,
+                        total_amount0: user_total_amount0,
+                        total_amount1: user_total_amount1,
+                    },
+                    vault_level_positions: MyPositions {
+                        positions: ArrayTrait::<MyPosition>::new(),
+                        total_amount0: vault_total_amount0,
+                        total_amount1: vault_total_amount1,
+                    },
+                };
+            }
+
+          
+            let mut adjusted_amount0 = amount0;
+            let mut adjusted_amount1 = amount1;
+            if (vault_total_amount1 == 0) {
+                adjusted_amount1 = 0;
+            } else {
+                let vault_assets_ratio = vault_total_amount0 * SCALE_18 / vault_total_amount1;
+                let user_assets_ratio = amount0 * SCALE_18 / amount1;
+
+                if (vault_assets_ratio > user_assets_ratio) {
+                    // amount 0 is the limiting factor
+                    adjusted_amount0 = amount1 * vault_assets_ratio / SCALE_18;
+                    adjusted_amount1 = amount1;
+                } else {
+                    // amount 1 is the limiting factor
+                    adjusted_amount0 = amount0;
+                    adjusted_amount1 = amount0 * SCALE_18 / vault_assets_ratio;
+                }
+            }
+            let mut i = 0;
+            let mut shares = 0_u256;
+            while i != self.managed_pools.len() {
+                let pool = self.managed_pools[i].read();
+                let range_position = *ranges.at(i.try_into().unwrap());
+                let range_amt0 = range_position.amount0;
+                let range_amt1 = range_position.amount1;
+                let range_liq = range_position.liquidity;
+
+                // divide user amount proportionally to the range amounts
+                let deposit_amt0 = if vault_total_amount0 > 0 {
+                    (adjusted_amount0 * range_amt0) / vault_total_amount0
+                } else { 0 };
+                let deposit_amt1 = if vault_total_amount1 > 0 {
+                    (adjusted_amount1 * range_amt1) / vault_total_amount1
+                } else { 0 };
+                let liquidity_delta0 = self.get_liquidity_delta(i, deposit_amt0, deposit_amt1);
+
+                // let liquidity_ratio = liquidity_delta0.into() * 10000 / range_liq;
+                // let amount0_ratio = deposit_amt0 * 10000 / range_amt0;
+                // let amount1_ratio = deposit_amt1 * 10000 / range_amt1;
+                // println!("liquidity_ratio {:?}", liquidity_ratio);
+                // println!("amount0_ratio {:?}", amount0_ratio);
+                // println!("amount1_ratio {:?}", amount1_ratio);
+                // actual deposit amounts
+                let (user_actual_deposit0, user_actual_deposit1) = self.get_amount_delta(i, liquidity_delta0.into());
+                user_total_amount0 += user_actual_deposit0;
+                user_total_amount1 += user_actual_deposit1;
+                user_positions.append(MyPosition {
+                    liquidity: liquidity_delta0.into(),
+                    amount0: user_actual_deposit0,
+                    amount1: user_actual_deposit1,
+                });
+
+                // use pool 0 as ref liquidity to calculate shares
+                if (i == 0) {
+                    shares = liquidity_delta0.into() * total_supply / range_liq;
+                } else {
+                    let shares_for_other_pool = liquidity_delta0.into() * total_supply / range_liq;
+                    // TODO Need to re-review this precision factor
+                    let PRECISION_FACTOR = 1000_000_000_u256;
+                    if (shares_for_other_pool > 0 && shares_for_other_pool / PRECISION_FACTOR != shares / PRECISION_FACTOR) {
+                        panic!("shares for other pool {:?} is not equal to shares {:?}", shares_for_other_pool, shares);
+                    }
+                }
+
+                i += 1;
+            }
+
+            SharesInfo {
+                shares: shares,
+                user_level_positions: MyPositions {
+                    positions: user_positions,
+                    total_amount0: user_total_amount0,
+                    total_amount1: user_total_amount1,
+                },
+                vault_level_positions: MyPositions {
+                    positions: ranges,
+                    total_amount0: vault_total_amount0,
+                    total_amount1: vault_total_amount1,
+                },
+            }
+        }
+
+        fn _convert_to_liquidity(self: @ContractState, shares: u256, pool_index: u64, supply: u256) -> u256 {
+            if (supply == 0) {
+                return supply;
+            }
+
+            let total_liquidity = self.total_liquidity_per_pool(pool_index);
+            return (shares * total_liquidity.into()) / supply;
         }
     }
 }

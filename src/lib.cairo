@@ -48,7 +48,12 @@ pub mod strategies {
         pub mod cl_vault;
         #[cfg(test)]
         pub mod test;
+        pub mod test_new;
     }
+}
+
+pub mod peripheral {
+    pub mod aum_oracle;
 }
 
 #[cfg(test)]
