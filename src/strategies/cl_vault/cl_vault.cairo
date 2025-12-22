@@ -78,6 +78,8 @@ mod ConcLiquidityVault {
     impl ERC20InternalImpl = ERC20Component::InternalImpl<ContractState>;
     impl ReentrancyGuardInternalImpl = ReentrancyGuardComponent::InternalImpl<ContractState>;
 
+    pub const SCALE_18: u256 = 1_000_000_000_000_000_000;
+
     #[storage]
     struct Storage {
         #[substorage(v0)]
@@ -213,6 +215,8 @@ mod ConcLiquidityVault {
             self.erc20.burn(caller, shares);
 
             let mut i = 0;
+            let mut total_amount0 = 0;
+            let mut total_amount1 = 0;
             while i != self.managed_pools.len() {
                 let pool = self.managed_pools[i].read();
                 self.handle_fees(i);
@@ -220,15 +224,23 @@ mod ConcLiquidityVault {
                 // withdraw from ekubo
                 let position = *my_positions.positions.at(i.try_into().unwrap());
                 let (amt0, amt1) = self._withdraw_position(position.liquidity, i);
-                assert(amt0.into() == position.amount0, 'invalid amount0');
-                assert(amt1.into() == position.amount1, 'invalid amount1');
+                let TWO_POWER_128: u256 = 0x100000000000000000000000000000000;
+                let post_fee_factor = (1000000 - (pool.pool_key.fee.try_into().unwrap() * 1000000 / TWO_POWER_128));
+                let post_fee_amt0 = if (position.amount0 > 0) { position.amount0 * post_fee_factor / 1000000 - 1 } else { 0 };
+                let post_fee_amt1 = if (position.amount1 > 0) { position.amount1 * post_fee_factor / 1000000 - 1 } else { 0 };
+                assert(amt0.into() == post_fee_amt0, 'invalid amount0');
+                assert(amt1.into() == post_fee_amt1, 'invalid amount1');
+
+                total_amount0 += post_fee_amt0;
+                total_amount1 += post_fee_amt1;
+
                 i += 1;
             }
 
             // transfer proceeds to receiver
             let pool_key = self.managed_pools[0].read().pool_key;
-            ERC20Helper::transfer(pool_key.token0, receiver, my_positions.total_amount0);
-            ERC20Helper::transfer(pool_key.token1, receiver, my_positions.total_amount1);
+            ERC20Helper::transfer(pool_key.token0, receiver, total_amount0);
+            ERC20Helper::transfer(pool_key.token1, receiver, total_amount1);
 
             self
                 .emit(
@@ -551,10 +563,10 @@ mod ConcLiquidityVault {
                 let (delta_amt0, delta_amt1) = self._calculate_liquidity_delta(i, (liquidity).into());
                 
                 if (token0_bal.try_into().unwrap() < delta_amt0.mag) {
-                    panic!("insufficient amt0 at index {:?}, required {:?}, available {:?}", i, delta_amt0.mag, token0_bal);
+                    panic!("Rebalance: insufficient amt0 at index {:?}, required {:?}, available {:?}", i, delta_amt0.mag, token0_bal);
                 }
                 if (token1_bal.try_into().unwrap() < delta_amt1.mag) {
-                    panic!("insufficient amt1 at index {:?}, required {:?}, available {:?}", i, delta_amt1.mag, token1_bal);
+                    panic!("Rebalance: insufficient amt1 at index {:?}, required {:?}, available {:?}", i, delta_amt1.mag, token1_bal);
                 }
 
                 self._ekubo_deposit(
@@ -590,6 +602,19 @@ mod ConcLiquidityVault {
         fn get_amount_delta(self: @ContractState, pool_index: u64, liquidity: u256) -> (u256, u256) {
             let (delta_amt0, delta_amt1) = self._calculate_liquidity_delta(pool_index, liquidity);
             (delta_amt0.mag.into(), delta_amt1.mag.into())
+        }
+
+        fn get_liquidity_delta(self: @ContractState, pool_index: u64, amount0: u256, amount1: u256) -> u128 {
+            let sqrt_values = self.sqrt_values[pool_index].read();
+            let liquidity_delta = ekuboLibDispatcher().max_liquidity(
+                self._get_pool_price(pool_index).sqrt_ratio,
+                sqrt_values.sqrt_lower,
+                sqrt_values.sqrt_upper,
+                amount0.try_into().unwrap(),
+                amount1.try_into().unwrap()
+            );
+            
+            return liquidity_delta;
         }
 
         fn get_fee_settings(self: @ContractState) -> FeeSettings {
@@ -812,13 +837,10 @@ mod ConcLiquidityVault {
             (delta.amount0, delta.amount1)
         }
 
-        fn _calculate_shares_from_amounts(
+        fn _calculate_initial_shares(
             self: @ContractState,
             amount0: u256,
             amount1: u256,
-            total_supply: u256,
-            total_under0: u256,
-            total_under1: u256
         ) -> u256 {
             let pool = self.managed_pools[0].read();
             let dec0 = ERC20Helper::decimals(pool.pool_key.token0);
@@ -830,25 +852,14 @@ mod ConcLiquidityVault {
             let amount0_n = amount0 * scale0;
             let amount1_n = amount1 * scale1;
 
-            if total_supply > 0 {
-                let shares0 = (amount0_n * total_supply) / total_under0;
-                let shares1 = (amount1_n * total_supply) / total_under1;
-                if shares0 < shares1 { shares0 } else { shares1 }
-            } else {
-                // todo to review
-                let init = self.init_values.read();
-                let shares0 = if init.init0 > 0 {
-                    amount0_n * 1_000_000_000_000_000_000_u256 / init.init0
-                } else { 0 };
-                let shares1 = if init.init1 > 0 {
-                    amount1_n * 1_000_000_000_000_000_000_u256 / init.init1
-                } else { 0 };
-                if shares0 > 0 && shares1 > 0 {
-                    if shares0 < shares1 { shares0 } else { shares1 }
-                } else {
-                    shares0 + shares1
-                }
-            }
+            let init = self.init_values.read();
+            let shares0 = if init.init0 > 0 {
+                amount0_n * SCALE_18 / init.init0
+            } else { 0 };
+            let shares1 = if init.init1 > 0 {
+                amount1_n * SCALE_18 / init.init1
+            } else { 0 };
+            (shares0 + shares1) / 2
         }
 
         fn _withdraw_position(ref self: ContractState, liquidity: u256, pool_index: u64) -> (u128, u128) {
@@ -994,7 +1005,7 @@ mod ConcLiquidityVault {
             let caller = get_caller_address();
             assert(amount0 > 0 || amount1 > 0, 'zero deposit');
 
-            let SharesInfo { shares, user_level_positions, vault_level_positions } = self._convert_to_shares(amount0, amount1);
+            let SharesInfo { shares, user_level_positions: _, vault_level_positions } = self._convert_to_shares(amount0, amount1);
             assert(shares > 0, 'zero shares');
 
             let total_supply = self.total_supply();
@@ -1002,25 +1013,35 @@ mod ConcLiquidityVault {
                 assert(vault_level_positions.total_amount0 > 0 || vault_level_positions.total_amount1 > 0, 'empty vault');
             }
 
-            // allow first deposit without ekubo deposit to allow vault curator to 
-            // call rebalance to add initial liquidity as they want. 
-            // - subsequent deposits will follow the current liquidity to deposit proportionally
-            if total_supply > 0 {
-                let mut i = 0;
-                while i != self.managed_pools.len() {
-                    self.handle_fees(i); // optional
-                    
-                    let position = *vault_level_positions.positions.at(i.try_into().unwrap());
-                    self._ekubo_deposit(
-                        caller,
-                        position.amount0,
-                        position.amount1,
-                        caller,
-                        i
-                    );
-                    i += 1;
-                } 
+            if (total_supply == 0) {
+                // vault positions can be 0 if total supply is 0, else == managed_pools.len()
+                assert(vault_level_positions.positions.len() == 0, 'unexpected flow');
+
+                // simply transfer funds to this
+                let this = get_contract_address();
+                let pool0 = self.managed_pools[0].read();
+                ERC20Helper::transfer_from(pool0.pool_key.token0, caller, this, amount0);
+                ERC20Helper::transfer_from(pool0.pool_key.token1, caller, this, amount1);
+                return shares;
+            } else {
+                assert(vault_level_positions.positions.len() == self.managed_pools.len().try_into().unwrap(), 'unexpected flow');
             }
+
+            // deposit funds to ekubo
+            let mut i = 0;
+            while i != self.managed_pools.len() {
+                self.handle_fees(i); // optional
+                
+                let position = *vault_level_positions.positions.at(i.try_into().unwrap());
+                self._ekubo_deposit(
+                    caller,
+                    position.amount0,
+                    position.amount1,
+                    caller,
+                    i
+                );
+                i += 1;
+            } 
 
             return shares;
         }
@@ -1061,13 +1082,11 @@ mod ConcLiquidityVault {
             let mut user_positions = ArrayTrait::<MyPosition>::new();
 
             if (total_supply == 0) {
-                let shares = self._calculate_shares_from_amounts(
+                let shares = self._calculate_initial_shares(
                     amount0,
                     amount1,
-                    total_supply,
-                    vault_total_amount0,
-                    vault_total_amount1,
                 );
+                // positions would be empty and zero amounts
                 return SharesInfo {
                     shares: shares,
                     user_level_positions: MyPositions {
@@ -1076,67 +1095,76 @@ mod ConcLiquidityVault {
                         total_amount1: user_total_amount1,
                     },
                     vault_level_positions: MyPositions {
-                        positions: ranges,
+                        positions: ArrayTrait::<MyPosition>::new(),
                         total_amount0: vault_total_amount0,
                         total_amount1: vault_total_amount1,
                     },
                 };
             }
 
+          
+            let mut adjusted_amount0 = amount0;
+            let mut adjusted_amount1 = amount1;
+            if (vault_total_amount1 == 0) {
+                adjusted_amount1 = 0;
+            } else {
+                let vault_assets_ratio = vault_total_amount0 * SCALE_18 / vault_total_amount1;
+                let user_assets_ratio = amount0 * SCALE_18 / amount1;
+
+                if (vault_assets_ratio > user_assets_ratio) {
+                    // amount 0 is the limiting factor
+                    adjusted_amount0 = amount1 * vault_assets_ratio / SCALE_18;
+                    adjusted_amount1 = amount1;
+                } else {
+                    // amount 1 is the limiting factor
+                    adjusted_amount0 = amount0;
+                    adjusted_amount1 = amount0 * SCALE_18 / vault_assets_ratio;
+                }
+            }
             let mut i = 0;
             let mut shares = 0_u256;
             while i != self.managed_pools.len() {
                 let pool = self.managed_pools[i].read();
-                let range_position = ranges.at(i.try_into().unwrap());
+                let range_position = *ranges.at(i.try_into().unwrap());
                 let range_amt0 = range_position.amount0;
                 let range_amt1 = range_position.amount1;
                 let range_liq = range_position.liquidity;
 
                 // divide user amount proportionally to the range amounts
                 let deposit_amt0 = if vault_total_amount0 > 0 {
-                    (amount0 * (*range_amt0).into()) / vault_total_amount0
+                    (adjusted_amount0 * range_amt0) / vault_total_amount0
                 } else { 0 };
                 let deposit_amt1 = if vault_total_amount1 > 0 {
-                    (amount1 * (*range_amt1).into()) / vault_total_amount1
+                    (adjusted_amount1 * range_amt1) / vault_total_amount1
                 } else { 0 };
+                let liquidity_delta0 = self.get_liquidity_delta(i, deposit_amt0, deposit_amt1);
 
-                let user_new_liq0 = if *range_amt0 > 0 {
-                    (*range_liq * deposit_amt0.try_into().unwrap()) / *range_amt0
-                } else { 0 };
-                let user_new_liq1 = if *range_amt1 > 0 {
-                    (*range_liq * deposit_amt1.try_into().unwrap()) / *range_amt1
-                } else { 0 };
-                // use min of the two to avoid overflow
-                let user_new_liq = if user_new_liq0 > 0 && user_new_liq1 > 0 {
-                    if user_new_liq0 < user_new_liq1 { user_new_liq0 } else { user_new_liq1 }
-                } else {
-                    user_new_liq0 + user_new_liq1
-                };
-
+                // let liquidity_ratio = liquidity_delta0.into() * 10000 / range_liq;
+                // let amount0_ratio = deposit_amt0 * 10000 / range_amt0;
+                // let amount1_ratio = deposit_amt1 * 10000 / range_amt1;
+                // println!("liquidity_ratio {:?}", liquidity_ratio);
+                // println!("amount0_ratio {:?}", amount0_ratio);
+                // println!("amount1_ratio {:?}", amount1_ratio);
                 // actual deposit amounts
-                let user_actual_deposit0 = if *range_liq > 0 {
-                    user_new_liq * *range_amt0 / *range_liq
-                } else { 0 };
-                let user_actual_deposit1 = if *range_liq > 0 {
-                    user_new_liq * *range_amt1 / *range_liq
-                } else { 0 };
+                let (user_actual_deposit0, user_actual_deposit1) = self.get_amount_delta(i, liquidity_delta0.into());
                 user_total_amount0 += user_actual_deposit0;
                 user_total_amount1 += user_actual_deposit1;
                 user_positions.append(MyPosition {
-                    liquidity: user_new_liq,
+                    liquidity: liquidity_delta0.into(),
                     amount0: user_actual_deposit0,
                     amount1: user_actual_deposit1,
                 });
 
                 // use pool 0 as ref liquidity to calculate shares
                 if (i == 0) {
-                    shares = self._calculate_shares_from_amounts(
-                        deposit_amt0,
-                        deposit_amt1,
-                        total_supply,
-                        vault_total_amount0,
-                        vault_total_amount1,
-                    );
+                    shares = liquidity_delta0.into() * total_supply / range_liq;
+                } else {
+                    let shares_for_other_pool = liquidity_delta0.into() * total_supply / range_liq;
+                    // TODO Need to re-review this precision factor
+                    let PRECISION_FACTOR = 1000_000_000_u256;
+                    if (shares_for_other_pool > 0 && shares_for_other_pool / PRECISION_FACTOR != shares / PRECISION_FACTOR) {
+                        panic!("shares for other pool {:?} is not equal to shares {:?}", shares_for_other_pool, shares);
+                    }
                 }
 
                 i += 1;

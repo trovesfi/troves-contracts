@@ -195,6 +195,7 @@ pub trait IClVault<TContractState> {
     fn add_pool(ref self: TContractState, pool: ManagedPool);
     fn remove_pool(ref self: TContractState, pool_index: u64);
     fn get_amount_delta(self: @TContractState, pool_index: u64, liquidity: u256) -> (u256, u256);
+    fn get_liquidity_delta(self: @TContractState, pool_index: u64, amount0: u256, amount1: u256) -> u128;
     fn get_fee_settings(self: @TContractState) -> FeeSettings;
     fn get_managed_pool(self: @TContractState, index: u64) -> ManagedPool;
 }
