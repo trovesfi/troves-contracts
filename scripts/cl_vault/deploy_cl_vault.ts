@@ -1,7 +1,7 @@
 import { ACCOUNT_NAME, deployContract, getAccount, getRpcProvider, getSwapInfo, myDeclare } from "../lib/utils";
 import { EKUBO_POSITIONS, EKUBO_CORE, EKUBO_POSITIONS_NFT, ORACLE_OURS, wstETH, ETH, ACCESS_CONTROL, xSTRK, STRK, accountKeyMap, SUPER_ADMIN, USDC, USDT} from "../lib/constants";
 import { byteArray, Call, Contract, TransactionExecutionStatus, uint256 } from "starknet";
-import { ContractAddr, EkuboCLVault, EkuboCLVaultStrategies, getMainnetConfig, Global, PricerFromApi, TokenInfo } from "@strkfarm/sdk";
+import { ContractAddr, Deployer, EkuboCLVault, EkuboCLVaultStrategies, getMainnetConfig, Global, PricerFromApi, TokenInfo } from "@strkfarm/sdk";
 import { executeBatch, scheduleBatch } from "../timelock/actions";
 
 // Added parameters for pool configuration
@@ -156,14 +156,14 @@ async function deployRebalancer() {
 }
 
 async function upgradeRebalancer() {
-    const { class_hash } = await myDeclare("ClVaultRebalancer");
+    const { class_hash } = await Deployer.myDeclare("ClVaultRebalancer", "strkfarm_contracts", getMainnetConfig(process.env.RPC_URL!), getAccount(ACCOUNT_NAME));
     const addr = '0x2b8572889935025b16ad39a9235d1c3c46bc2b5694de5d81338931149f39a0d';
     const cls = await getRpcProvider().getClassAt(addr);
     const contract = new Contract({abi: cls.abi, address: addr, providerOrAccount: getRpcProvider()});
     const acc = getAccount(accountKeyMap[SUPER_ADMIN]);
 
     const call = await contract.populate("upgrade", [class_hash]);
-    const salt = '0x1';
+    const salt = '0x7';
     const scheduleCall = await scheduleBatch([call], salt, "0x0", true);
     const executeCall = await executeBatch([call], salt, "0x0", true);
     const tx = await acc.execute([...scheduleCall, ...executeCall]);
@@ -316,6 +316,6 @@ if (require.main === module) {
 
     // upgrade()
     // deployRebalancer();
-    // upgradeRebalancer()
-    initializePools();
+    upgradeRebalancer()
+    // initializePools();
 }

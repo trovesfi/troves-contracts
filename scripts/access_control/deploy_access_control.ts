@@ -46,7 +46,7 @@ async function grantRelayerRole() {
     const accessControl = new Contract({abi: cls.abi, address: ACCESS_CONTROL, providerOrAccount: provider});  
 
     // const _RELAYER = '0x2f2183e09bbbe50755061d79aa28fd452e7cb82238ebf7038f52442e4538f80'; // rebalancer address
-    const _RELAYER = '0x2b8572889935025b16ad39a9235d1c3c46bc2b5694de5d81338931149f39a0d'; // rebalancer address
+    const _RELAYER = '0x024b563C1C7d41B32BF4EFB9F38828508a65Be2d6e25268E9f63F22C5e9E51c5'; // rebalancer address
     const call = await accessControl.populate("grant_role", [
         hash.getSelectorFromName('RELAYER'),
         _RELAYER
@@ -136,3 +136,7 @@ if (require.main === module) {
     grantRelayerRole().catch(console.error);
     // revokeRelayerRole().catch(console.error);
 }
+
+
+// Forge yield access control contract address:
+// 0x00ef79f9cb3b4371d910d62e7582d66e46088dc4688cd6737525af037da59b59

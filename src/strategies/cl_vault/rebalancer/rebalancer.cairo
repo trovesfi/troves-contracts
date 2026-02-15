@@ -7,12 +7,14 @@ pub trait IClVaultRebalancer<TContractState> {
     fn rebalance(
         ref self: TContractState,
         vault_address: ContractAddress,
+        simulate_flashloan: bool,
         price_change_swap_params: AvnuMultiRouteSwap,
         required_bounds_after_price_change: Bounds,
         simulate_price_change: bool,
         rebalance_swap_params: AvnuMultiRouteSwap,
         new_bounds: Bounds,
         simulate_rebalance: bool,
+        use_usd_value: bool,
         sell_swap_params: AvnuMultiRouteSwap,
         receiver: ContractAddress,
         lst_address: ContractAddress,
@@ -30,6 +32,12 @@ pub trait IClVaultRebalancer<TContractState> {
         add_liquidity_amount0: u256,
         add_liquidity_amount1: u256,
         swap_input_params: AvnuMultiRouteSwap,
+    );
+
+    fn assert_pool_tick_is_in_bounds(
+        ref self: TContractState,
+        pool_key: PoolKey,
+        bounds: Bounds
     );
 
     fn arbitrage(
@@ -51,7 +59,7 @@ pub mod ClVaultRebalancer {
     use strkfarm_contracts::components::swap::{AvnuMultiRouteSwap, AvnuMultiRouteSwapTrait};
     use strkfarm_contracts::strategies::cl_vault::interface::{IClVaultDispatcher, IClVaultDispatcherTrait};
     use strkfarm_contracts::helpers::ERC20Helper;
-    use strkfarm_contracts::interfaces::oracle::{IPriceOracleDispatcher};
+    use strkfarm_contracts::interfaces::oracle::{IPriceOracleDispatcher, IPriceOracleDispatcherTrait};
     use strkfarm_contracts::helpers::constants;
     use strkfarm_contracts::unaudited::IFlashloan::{IFlash, IVesuDispatcher, IVesuDispatcherTrait, IVesuCallback};
     use strkfarm_contracts::interfaces::IEkuboPosition::{IEkuboDispatcher, IEkuboDispatcherTrait};
@@ -125,6 +133,7 @@ pub mod ClVaultRebalancer {
     #[derive(Drop, Clone, Serde)]
     pub struct RebalanceParams {
         pub vault_address: ContractAddress,
+        pub simulate_flashloan: bool,
         pub price_change_swap_params: AvnuMultiRouteSwap,
         pub required_bounds_after_price_change: Bounds,
         pub simulate_price_change: bool,
@@ -138,6 +147,7 @@ pub mod ClVaultRebalancer {
         pub lst_address: ContractAddress,
         pub sample_liquidity_bounds: Bounds,
         pub allow_loss: bool,
+        pub use_usd_value: bool,
     }
 
     #[derive(Drop, Clone, Serde)]
@@ -221,6 +231,10 @@ pub mod ClVaultRebalancer {
             let action = *span_array.pop_front().unwrap();
             if (action == 1) {
                 let deserialized_struct: RebalanceParams = Serde::<RebalanceParams>::deserialize(ref span_array).unwrap();
+
+                let simulate_flashloan = deserialized_struct.simulate_flashloan;
+                assert(!simulate_flashloan, 'Flashloan done');
+                
                 let vault_address = deserialized_struct.vault_address;
                 let price_change_swap_params = deserialized_struct.price_change_swap_params;
                 let old_bounds = deserialized_struct.required_bounds_after_price_change;
@@ -233,6 +247,7 @@ pub mod ClVaultRebalancer {
                 let lst_address = deserialized_struct.lst_address;
                 let allow_loss = deserialized_struct.allow_loss;
                 let sample_liquidity_bounds = deserialized_struct.sample_liquidity_bounds;
+                let use_usd_value = deserialized_struct.use_usd_value;
                 self._rebalance(
                     vault_address,
                     price_change_swap_params,
@@ -241,6 +256,7 @@ pub mod ClVaultRebalancer {
                     rebalance_swap_params,
                     new_bounds,
                     deserialized_struct.simulate_rebalance,
+                    use_usd_value,
                     sell_swap_params,
                     nft_id,
                     liq,
@@ -265,6 +281,12 @@ pub mod ClVaultRebalancer {
             } else {
                 assert(false, 'Invalid action for flash loan');
             }
+
+            // Assert that the flashloan was repaid
+            let tokenBalance = ERC20Helper::balanceOf(token, get_contract_address());
+            if (tokenBalance < flash_amount.into()) {
+                panic!("Insufficient flashloan repay amount: expected {:?}, got {:?}", flash_amount, tokenBalance);
+            }
         }
     }
 
@@ -273,7 +295,7 @@ pub mod ClVaultRebalancer {
         fn rebalance(
             ref self: ContractState,
             vault_address: ContractAddress,
-            
+            simulate_flashloan: bool,
             // move price params
             price_change_swap_params: AvnuMultiRouteSwap,
             required_bounds_after_price_change: Bounds,
@@ -283,6 +305,7 @@ pub mod ClVaultRebalancer {
             rebalance_swap_params: AvnuMultiRouteSwap,
             new_bounds: Bounds,
             simulate_rebalance: bool,
+            use_usd_value: bool,
 
             // This is the swap to close books and sell xSTRK
             sell_swap_params: AvnuMultiRouteSwap,
@@ -317,12 +340,14 @@ pub mod ClVaultRebalancer {
             // serialise the parameters for flash loan
             let myStruct = RebalanceParams {
                 vault_address,
+                simulate_flashloan,
                 price_change_swap_params,
                 required_bounds_after_price_change,
                 simulate_price_change,
                 rebalance_swap_params,
                 new_bounds,
                 simulate_rebalance,
+                use_usd_value,
                 sell_swap_params,
                 nft_id, // This will be set after adding liquidity
                 liq, // This will be set after adding liquidity
@@ -382,6 +407,9 @@ pub mod ClVaultRebalancer {
                 add_liquidity_amount1
             );
 
+            let from_token = swap_input_params.token_from_address;
+            let to_token = swap_input_params.token_to_address;
+
             // Step 2: Execute the price change swap to move ekubo pool price
             if swap_input_params.token_from_amount > 0 {
                 // Execute the price change swap
@@ -411,8 +439,23 @@ pub mod ClVaultRebalancer {
             );
 
             // Step 4: Return any remaining funds to the receiver
-            self._return_remaining_funds(get_caller_address(), swap_input_params.token_from_address);
-            self._return_remaining_funds(get_caller_address(), swap_input_params.token_to_address);
+            self._return_remaining_funds(get_caller_address(), from_token);
+            self._return_remaining_funds(get_caller_address(), to_token);
+        }
+
+        fn assert_pool_tick_is_in_bounds(
+            ref self: ContractState,
+            pool_key: PoolKey,
+            bounds: Bounds
+        ) {
+            let pool_price = IEkuboDispatcher { contract_address: constants::EKUBO_POSITIONS() }
+            .get_pool_price(pool_key);
+            if (pool_price.tick < bounds.lower) {
+                panic!("Pool tick did not reach lower: current:{:?}, lower: {:?}", pool_price.tick, bounds.lower);
+            }
+            if (pool_price.tick > bounds.upper) {
+                panic!("Pool tick did not reach upper: current: {:?}, upper: {:?}", pool_price.tick, bounds.upper);
+            }
         }
 
         fn arbitrage(
@@ -441,7 +484,6 @@ pub mod ClVaultRebalancer {
             let mut calldata: Array<felt252> = array![];
             from_amount.low.serialize(ref calldata);
             from_token.serialize(ref calldata);
-            calldata.serialize(ref calldata);
             calldata.append(2); // Append action type
             arbParam.serialize(ref calldata);
             ICoreDispatcher {
@@ -485,6 +527,7 @@ pub mod ClVaultRebalancer {
             rebalance_swap_params: AvnuMultiRouteSwap,
             new_bounds: Bounds,
             simulate_rebalance: bool,
+            use_usd_value: bool,
 
             // close books
             sell_swap_params: AvnuMultiRouteSwap,
@@ -527,12 +570,11 @@ pub mod ClVaultRebalancer {
             // Step 2: Call the vault's rebalance function
             let total_supply = ERC20Helper::total_supply(vault.contract_address);
             let assetInfoBefore = vault.convert_to_assets(total_supply);
-            let summary_before = self._summarize_position(
-                lst_address,
-                pool_key,
-                assetInfoBefore.amount0,
-                assetInfoBefore.amount1
-            );
+            let summary_before = if use_usd_value {
+                self._summarize_position_using_usd_price(lst_address, pool_key, assetInfoBefore.amount0, assetInfoBefore.amount1)
+            } else {
+                self._summarize_position(lst_address, pool_key, assetInfoBefore.amount0, assetInfoBefore.amount1)
+            };
 
             vault.rebalance(new_bounds, rebalance_swap_params);
             assert(!simulate_rebalance, 'Rebalance simulation done');
@@ -547,7 +589,6 @@ pub mod ClVaultRebalancer {
             );
 
             // Step 5: Swap xSTRK to STRK
-            let underyling_address = if pool_key.token0 == lst_address { pool_key.token1 } else { pool_key.token0 };
             let xSTRKBal = ERC20Helper::balanceOf(lst_address, this);
 
             // settle funds used for initial LP
@@ -561,15 +602,25 @@ pub mod ClVaultRebalancer {
             let xSTRKBal = xSTRKBal - amtLST.into(); // Update balance after transfer
 
             let xSTRKBal2 = ERC20Helper::balanceOf(lst_address, this);
+            if (xSTRKBal != xSTRKBal2) {
+                panic!("LST balance mismatch: expected {:?}, got {:?}", xSTRKBal, xSTRKBal2);
+            }
             if xSTRKBal > 0 {
                 let mut _sell_swap_params = sell_swap_params.clone();
                 _sell_swap_params.token_from_amount = xSTRKBal; // Sell 100% of xSTRK balance
 
+                let sellFromToken = _sell_swap_params.token_from_address;
+                let balance = ERC20Helper::balanceOf(sellFromToken, this);
+                if (balance != xSTRKBal) {
+                    panic!("LST like token mismatch: expected {:?}, got {:?}", xSTRKBal, balance);
+                }
                 // Swap
-                _sell_swap_params.swap(IPriceOracleDispatcher { contract_address: constants::ORACLE_OURS() });
+                let output = _sell_swap_params.swap(IPriceOracleDispatcher { contract_address: constants::ORACLE_OURS() });
+                // panic!("swap done, output: {:?}, input: {:?}", output, xSTRKBal);
             }
             // panic!("amtLST: {:?}, xSTRKBal: {:?}, xSTRKBal2: {:?}", amtLST, xSTRKBal, xSTRKBal2);
 
+            let underyling_address = if pool_key.token0 == lst_address { pool_key.token1 } else { pool_key.token0 };
             let STRKBal = ERC20Helper::balanceOf(underyling_address, this);
             let amtUnderlying = if pool_key.token0 == lst_address { amt1 } else { amt0 };
             assert(STRKBal >= amtUnderlying.into(), 'Undr bal after reb is too low');
@@ -581,12 +632,11 @@ pub mod ClVaultRebalancer {
             );
 
             let assetInfo = vault.convert_to_assets(total_supply);
-            let summary_after = self._summarize_position(
-                lst_address,
-                pool_key,
-                assetInfo.amount0,
-                assetInfo.amount1
-            );
+            let summary_after = if use_usd_value {
+                self._summarize_position_using_usd_price(lst_address, pool_key, assetInfo.amount0, assetInfo.amount1)
+            } else {
+                self._summarize_position(lst_address, pool_key, assetInfo.amount0, assetInfo.amount1)
+            };
             if (summary_after < summary_before && !allow_loss) {
                 panic!("Rebalance did not yield profit: summary_after: {:?}, summary_before: {:?}", summary_after, summary_before);
             }
@@ -612,10 +662,13 @@ pub mod ClVaultRebalancer {
             // Execute the buy swap
             buy_swap_params.swap(IPriceOracleDispatcher { contract_address: constants::ORACLE_OURS() });
 
+            
             // Execute the sell swap
             let balance = ERC20Helper::balanceOf(to_token, get_contract_address());
             let mut _sell_swap_params = sell_swap_params.clone();
             _sell_swap_params.token_from_amount = balance; // Sell all of the bought token
+            let min_amount = sell_swap_params.token_to_min_amount;
+            // panic!("Executing buy swap: {:?}, min_amount: {:?}", balance, min_amount);
             _sell_swap_params.swap(IPriceOracleDispatcher { contract_address: constants::ORACLE_OURS() });
 
             let balance_after = ERC20Helper::balanceOf(from_token, get_contract_address());
@@ -692,6 +745,22 @@ pub mod ClVaultRebalancer {
                     0x00,
                     true
                 );
+        }
+
+        fn _summarize_position_using_usd_price(
+            self: @ContractState,
+            lst_address: ContractAddress,
+            pool_key: PoolKey,
+            amount0: u256, // xSTRK
+            amount1: u256 // STRK
+        ) -> u256 {
+            let token0_usd_price = IPriceOracleDispatcher { contract_address: constants::ORACLE_OURS() }.get_price(pool_key.token0);
+            let token1_usd_price = IPriceOracleDispatcher { contract_address: constants::ORACLE_OURS() }.get_price(pool_key.token1);
+            let token0_decimals = ERC20Helper::decimals(pool_key.token0);
+            let token1_decimals = ERC20Helper::decimals(pool_key.token1);
+            let token0_usd_value = strkfarm_contracts::helpers::safe_decimal_math::mul_decimals(token0_usd_price.into(), amount0, token0_decimals);
+            let token1_usd_value = strkfarm_contracts::helpers::safe_decimal_math::mul_decimals(token1_usd_price.into(), amount1, token1_decimals);
+            return token0_usd_value + token1_usd_value;
         }
 
         // Only works for xSTRK/STRK

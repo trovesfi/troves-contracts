@@ -1,9 +1,10 @@
 import dotenv from 'dotenv';
 dotenv.config();
-import { ContractAddr, DualActionAmount, EkuboCLVault, EkuboCLVaultStrategies, getMainnetConfig, Global, HyperLSTStrategies, Pricer, PricerFromApi, PricerRedis, UniversalLstMultiplierStrategy, UniversalStrategies, UniversalStrategy, Web3Number } from "@strkfarm/sdk";
+import { ContractAddr, DualActionAmount, EkuboCLVault, EkuboCLVaultStrategies, getMainnetConfig, Global, HyperLSTStrategies, Pricer, PricerFromApi, PricerRedis, SenseiStrategies, SenseiVault, SIMPLE_SANITIZER_V2, StandardMerkleTree, UniversalLstMultiplierStrategy, UniversalStrategies, UniversalStrategy, VesuPools, Web3Number } from "@strkfarm/sdk";
 import { getAccount, getRpcProvider } from "../lib/utils";
 import { STRK, xSTRK } from "../lib/constants";
-import { TransactionExecutionStatus } from "starknet";
+import { hash, num, shortString, TransactionExecutionStatus } from "starknet";
+import { toBigInt } from 'ethers';
 
 async function main() {
     const provider = getRpcProvider(process.env.RPC_URL!);
@@ -13,8 +14,10 @@ async function main() {
     const pricer = new PricerFromApi(config, await Global.getTokens());
     console.log('Pricer ready');
 
-    // const mod = new EkuboCLVault(config, pricer, EkuboCLVaultStrategies.find(s => s.name.includes('Ekubo xLBTC'))!);
-    const mod = new UniversalLstMultiplierStrategy(config, pricer, HyperLSTStrategies[0]);
+    const mod = new EkuboCLVault(config, pricer, EkuboCLVaultStrategies.find(s => s.name.includes('Ekubo WBTC/USDC') && !s.name.includes('Ekubo WBTC/USDC.e'))!);
+    // const mod = new UniversalLstMultiplierStrategy(config, pricer, HyperLSTStrategies[0]);
+    // console.log(`Using vault: ${mod.metadata.name} at ${mod.address.address}`);
+    // const mod = new SenseiVault(config, pricer, SenseiStrategies[0]);
     // const mod = new UniversalStrategy(config, pricer, UniversalStrategies.find(u => u.name.includes('USDT')));
 
     // const acc = getAccount('strkfarmadmin');
@@ -22,8 +25,8 @@ async function main() {
     // const userTVL = await mod.getUserTVL(user);
     // console.log(`User TVL: ${JSON.stringify(userTVL)}`);
 
-    // const tvl = await mod.getTVL();
-    // console.log(`TVL: ${JSON.stringify(tvl)}`);
+    const tvl = await mod.getTVL(6492257);
+    console.log(`TVL: ${JSON.stringify(tvl)}`);
 
     // const aum = await mod.getAUM();
     // console.log(`AUM: `, aum);
@@ -40,14 +43,14 @@ async function main() {
     // const maxWithdrawables = await mod.maxWithdrawables();
     // console.log(`Max withdrawables: `, maxWithdrawables);
 
-    // const apy = await mod.netAPY();
-    // console.log(`Net APY: ${JSON.stringify(apy)}`);
+    // const positions = await mod.getVaultPositions();
+    // console.log(`Positions: ${JSON.stringify(positions)}`);
 
     // const currentPrice = await mod.getCurrentPrice();
     // console.log(`Current price: ${JSON.stringify(currentPrice)}`);
 
-    // const positions = await mod.getVaultPositions();
-    // console.log(`Positions: `, positions);
+    // const apy = await mod.netAPY();
+    // console.log(`APY: `, apy);
     // console.log(`Nets: ${positions[0].amount.minus(positions[3].amount).toString()} USDC, ${positions[2].amount.minus(positions[1].amount).toString()} ETH`)
 
     // 2886881
@@ -102,8 +105,8 @@ async function main() {
     // const total_assets = await mod.contract.call("total_assets", [], { blockIdentifier: "2882000" });
     // console.log(`Total supply: ${total_supply}, Total assets: ${total_assets}`);
 
-    const maxBorrowables = await mod.getMaxBorrowableAmount();
-    console.log(`Max borrowables: ${JSON.stringify(maxBorrowables)}`);
+    // const maxBorrowables = await mod.getMaxBorrowableAmount();
+    // console.log(`Max borrowables: ${JSON.stringify(maxBorrowables)}`);
 
     // const depositInputs = await mod.matchInputAmounts({
     //     token0: {
@@ -182,7 +185,76 @@ async function harvest() {
     
 }
 
+async function getCustomMerkleTree() {
+    
+    // modify delegation to migration contract
+    const MIGRATION_CONTRACT = ContractAddr.from('0x2716dc8bf87005e2916241ac1167fb400cf69a708540c2c0c1672a654dbc5a9');
+    const POOL_ID = VesuPools.Re7STRK;
+    const packedArguments: bigint[] = [
+        toBigInt(MIGRATION_CONTRACT.toString()), // v2
+    ];
+    const leaf1 = {
+        id: BigInt(num.getDecimalString(shortString.encodeShortString("mod-del-on"))),
+        readableId: "mod-del-on",
+        data: [
+            SIMPLE_SANITIZER_V2.toBigInt(), // sanitizer address
+            POOL_ID.toBigInt(), // contract
+            toBigInt(hash.getSelectorFromName("modify_delegation")), // method name
+            BigInt(packedArguments.length),
+            ...packedArguments
+        ]
+    };
+
+    // transfer
+    const TRANSFER_SANI = ContractAddr.from('0x2c77655d0d3f87d395947def9862865f1c6a6e732c3e837ff884fcbd1fa412');
+    const xSTRK = Global.getDefaultTokens().find(t => t.symbol === 'xSTRK')!;
+    const xSTRK_SENSEI = ContractAddr.from('0x7023a5cadc8a5db80e4f0fde6b330cbd3c17bbbf9cb145cbabd7bd5e6fb7b0b');
+    const packedArguments2: bigint[] = [
+        toBigInt(xSTRK_SENSEI.toString()), // to address
+    ];
+    const leaf2 = {
+        id: BigInt(num.getDecimalString(shortString.encodeShortString("transfer"))),
+        readableId: "transfer",
+        data: [
+            TRANSFER_SANI.toBigInt(), // sanitizer address
+            xSTRK.address.toBigInt(), // contract
+            toBigInt(hash.getSelectorFromName("transfer")), // method name
+            BigInt(packedArguments2.length),
+            ...packedArguments2
+        ]
+    };
+
+    const packedArguments3: bigint[] = [
+        toBigInt(xSTRK_SENSEI.toString()), // v2
+    ];
+    const leaf3 = {
+        id: BigInt(num.getDecimalString(shortString.encodeShortString("mod-del-on2"))),
+        readableId: "mod-del-on2",
+        data: [
+            SIMPLE_SANITIZER_V2.toBigInt(), // sanitizer address
+            POOL_ID.toBigInt(), // contract
+            toBigInt(hash.getSelectorFromName("modify_delegation")), // method name
+            BigInt(packedArguments3.length),
+            ...packedArguments3
+        ]
+    };
+
+    const leaves = [leaf1, leaf2, leaf3];
+
+    const standardTree = StandardMerkleTree.of(leaves.map(l => l));
+
+    const root = standardTree.root;
+    console.log(`Root: ${root}`);
+
+    for (const [i, v] of standardTree.entries()) {
+        console.log(`Index: ${i}, Value: ${v.readableId}`);
+        console.log(`Value: ${JSON.stringify(standardTree.getProof(i))}`);
+    }
+
+}
+
 if (require.main === module) {
-    main();
+    // main();
     // harvest();
+    getCustomMerkleTree();
 }
