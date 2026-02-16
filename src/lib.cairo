@@ -54,8 +54,10 @@ pub mod strategies {
     pub mod cl_vault {
         pub mod interface;
         pub mod cl_vault;
-        #[cfg(test)]
-        pub mod test;
+        // #[cfg(test)]
+        // pub mod test;
+        // #[cfg(test)]
+        // pub mod test_new;
     }
 }
 

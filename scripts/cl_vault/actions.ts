@@ -18,19 +18,19 @@ async function main() {
     // const strategy = UniversalStrategies.find(u => u.name.includes('ETH'))!;
     // const mod = new UniversalStrategy(config, pricer, strategy);
 
-    const acc = getAccount('strkfarmadmin');
-    const user = ContractAddr.from(acc.address);
-    const userTVL = await mod.getUserTVL(user);
-    console.log(`User TVL: ${JSON.stringify(userTVL)}`);
+    // const acc = getAccount('strkfarmadmin');
+    // const user = ContractAddr.from(acc.address);
+    // const userTVL = await mod.getUserTVL(user);
+    // console.log(`User TVL: ${JSON.stringify(userTVL)}`);
 
-    const tvl = await mod.getTVL();
-    console.log(`TVL: ${JSON.stringify(tvl)}`);
+    // const tvl = await mod.getTVL();
+    // console.log(`TVL: ${JSON.stringify(tvl)}`);
 
     const apy = await mod.netAPY();
     console.log(`Net APY: ${JSON.stringify(apy)}`);
 
-    const currentPrice = await mod.getCurrentPrice();
-    console.log(`Current price: ${JSON.stringify(currentPrice)}`);
+    // const currentPrice = await mod.getCurrentPrice();
+    // console.log(`Current price: ${JSON.stringify(currentPrice)}`);
 
     // const depositInputs = await mod.matchInputAmounts({
     //     token0: {
@@ -109,6 +109,6 @@ async function harvest() {
 }
 
 if (require.main === module) {
-    // main();
-    harvest();
+    main();
+    // harvest();
 }

@@ -1,4 +1,5 @@
 import { ACCOUNT_NAME, deployContract, getAccount, getRpcProvider, getSwapInfo, myDeclare } from "../lib/utils";
+<<<<<<< HEAD
 <<<<<<< Updated upstream
 import { EKUBO_POSITIONS, EKUBO_CORE, EKUBO_POSITIONS_NFT, ORACLE_OURS, wstETH, ETH, ACCESS_CONTROL, xSTRK, STRK, accountKeyMap, SUPER_ADMIN, USDC, USDT} from "../lib/constants";
 import { byteArray, Contract, TransactionExecutionStatus, uint256 } from "starknet";
@@ -8,6 +9,11 @@ import { EKUBO_POSITIONS, EKUBO_CORE, EKUBO_POSITIONS_NFT, ORACLE_OURS, wstETH, 
 import { byteArray, Contract, num, num, TransactionExecutionStatus, uint256 } from "starknet";
 import { ContractAddr, EkuboCLVaultStrategies } from "@strkfarm/sdk";
 >>>>>>> Stashed changes
+=======
+import { EKUBO_POSITIONS, EKUBO_CORE, EKUBO_POSITIONS_NFT, ORACLE_OURS, wstETH, ETH, ACCESS_CONTROL, xSTRK, STRK, accountKeyMap, SUPER_ADMIN, USDC, USDT, WBTC, xWBTC, tBTC, xtBTC, xsBTC, solvBTC} from "../lib/constants";
+import { byteArray, Contract, num, num, TransactionExecutionStatus, uint256 } from "starknet";
+import { ContractAddr, EkuboCLVaultStrategies } from "@strkfarm/sdk";
+>>>>>>> 5212ab599ae3b9d96089d145cb40f646d0901e8c
 import { executeBatch, scheduleBatch } from "../timelock/actions";
 
 // Added parameters for pool configuration
@@ -154,31 +160,54 @@ async function upgrade() {
     console.log(`Upgrade done`);
 }
 
+function getSortedTokens(token0: string, token1: string) {
+    const _token0 = BigInt(num.getDecimalString(token0));
+    const _token1 = BigInt(num.getDecimalString(token1));
+    if (_token0 < _token1) {
+        return [num.getHexString(token0), num.getHexString(token1)];
+    } else {
+        return [num.getHexString(token1), num.getHexString(token0)];
+    }
+}
+
 // 0x104d7db720522a6
 // 0x104d7db720522a6
 if (require.main === module) {
     // deploy cl vault
+<<<<<<< HEAD
 <<<<<<< Updated upstream
 =======
     const myToken0 = xLBTC;
     const myToken1 = LBTC;
     const decimals = 8;
+=======
+    const myToken0 = xsBTC;
+    const myToken1 = solvBTC;
+    const decimals = 18;
+>>>>>>> 5212ab599ae3b9d96089d145cb40f646d0901e8c
 
     const [token0, token1] = getSortedTokens(myToken0, myToken1);
     console.log('token0', token0);
     console.log('token1', token1);
+<<<<<<< HEAD
 >>>>>>> Stashed changes
+=======
+>>>>>>> 5212ab599ae3b9d96089d145cb40f646d0901e8c
     const poolKey = createPoolKey(
-        STRK,
-        USDC,
-        '170141183460469235273462165868118016',
-        1000,
+        token0,
+        token1,
+        '34028236692093847977029636859101184',
+        200,
         0
     );
 
+    // if equal, price is in token1 per token0, i.e. token0 price / token1 price
+    const minPrice = ContractAddr.from(myToken0).eqString(token0) ? 0.997 : 1;
+    const maxPrice = ContractAddr.from(myToken0).eqString(token0) ? 1 : 1.003;
+
     const bounds = createBounds(
-        priceToTick(0.10, false, poolKey.tick_spacing, 18, 6),
-        priceToTick(0.12, false, poolKey.tick_spacing, 18, 6)
+        priceToTick(minPrice, false, poolKey.tick_spacing, decimals, decimals),
+        priceToTick(maxPrice, false, poolKey.tick_spacing, decimals, decimals)
     );
 
     console.log('bounds', bounds);
@@ -188,8 +217,13 @@ if (require.main === module) {
         bounds,
         1000, // 10% fee
         "0x06419f7DeA356b74bC1443bd1600AB3831b7808D1EF897789FacFAd11a172Da7", // fee collector
+<<<<<<< HEAD
         "tEkubo xLBTC/LBTC",
         "tEkubo xLBTC/LBTC",
+=======
+        "tEkubo xtBTC/tBTC",
+        "tEkxtBTCtBTC",
+>>>>>>> 5212ab599ae3b9d96089d145cb40f646d0901e8c
      );
     // rebalance();
 
