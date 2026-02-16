@@ -15,8 +15,8 @@ ekubo = { git = "https://github.com/EkuboProtocol/abis.git", rev = "f4a16b95967c
 starknet = ">=2.11.0" # cairo version
 
 [dev-dependencies]
-snforge_std = { git = "https://github.com/foundry-rs/starknet-foundry", tag = "v0.46.0" }
-assert_macros = "2.11.4"
+snforge_std = { git = "https://github.com/foundry-rs/starknet-foundry", tag = "v0.48.0" }
+assert_macros = "2.12.1"
 
 [[target.starknet-contract]]
 casm = true
