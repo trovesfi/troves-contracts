@@ -1,4 +1,4 @@
-import { ContractAddr, DualActionAmount, EkuboCLVault, EkuboCLVaultStrategies, getMainnetConfig, Global, Pricer, PricerFromApi, PricerRedis, Web3Number } from "@strkfarm/sdk";
+import { ContractAddr, DualActionAmount, EkuboCLVault, EkuboCLVaultStrategies, getMainnetConfig, Global, HyperLSTStrategies, Pricer, PricerFromApi, PricerRedis, UniversalLstMultiplierStrategy, UniversalStrategies, UniversalStrategy, Web3Number } from "@strkfarm/sdk";
 import { getAccount, getRpcProvider } from "../lib/utils";
 import { STRK, xSTRK } from "../lib/constants";
 
@@ -10,7 +10,13 @@ async function main() {
     const pricer = new PricerFromApi(config, await Global.getTokens());
     console.log('Pricer ready');
 
-    const mod = new EkuboCLVault(config, pricer, EkuboCLVaultStrategies[0]);
+    // const mod = new EkuboCLVault(config, pricer, EkuboCLVaultStrategies.find((strategy) => strategy.name.includes('ETH/USDC')));
+
+    const strategy = HyperLSTStrategies.find(u => u.name.includes('xWBTC'))!;
+    const mod = new UniversalLstMultiplierStrategy(config, pricer, strategy);
+
+    // const strategy = UniversalStrategies.find(u => u.name.includes('ETH'))!;
+    // const mod = new UniversalStrategy(config, pricer, strategy);
 
     // const acc = getAccount('strkfarmadmin');
     // const user = ContractAddr.from(acc.address);
@@ -41,6 +47,11 @@ async function main() {
     // const depositAmounts = await mod.getDepositAmounts(depositInputs);
     // console.log(`Deposit amounts: token0: ${depositAmounts.token0.amount}, token1: ${depositAmounts.token1.amount}`);
     
+    // const unclaimedFees = await mod.getUncollectedFees();
+    // console.log(`Unclaimed fees: ${JSON.stringify(unclaimedFees)}`);
+
+    // const feeHistory = await mod.getFeeHistory('24h');
+    // console.log(`Fee history: ${JSON.stringify(feeHistory)}`);
     // const caller = ContractAddr.from(acc.address);
 
     // const depositCalls = await mod.depositCall(depositInputs, caller);

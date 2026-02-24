@@ -4,7 +4,7 @@ use starknet::contract_address::contract_address_const;
 pub const BASIS_POINTS_FACTOR: u32 = 10000;
 pub const TWO_POWER_128: u128 = 0xffffffffffffffffffffffffffffffff;
 pub const TWO_POWER_256: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff;
-
+pub const HEALTH_FACTOR_FALLBACK: u32 = 10 * 10000; // for assert healthy when 100% withdraw happens
 pub const MAX_SLIPPAGE_BPS: u32 = 300; // 3%
 
 pub fn VESU_SINGLETON_ADDRESS() -> ContractAddress {

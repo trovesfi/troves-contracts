@@ -113,7 +113,7 @@ pub impl vesuSettingsImpl of ILendMod<vesuStruct, vesuToken> {
         let max_ltv_u256: u256 = max_ltv.into();
         let (_, col_value, debt_value) = stonDisp
             .check_collateralization(*self.pool_id, col, debt, user);
-        if (col_value == 0) {
+        if (col_value == 0 || debt_value == 0) {
             return 10 * 10000; // for assert healthy when 100% withdraw happens
         }
         let health_factor = ((max_ltv_u256 * pow::ten_pow(4))

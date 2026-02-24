@@ -1,8 +1,0 @@
-# How to integrate Ekubo?
-Ekubo is a V3 Uniswap Style AMM on Starknet. It uses concentrated liquidity. 
-
-# Add liquidity to Ekubo
-Call `deposit_liquidity` in src/tests/ekubo.cairo
-
-# Withdraw liquidity from Ekubo
-Call `withdraw_liquidity` in src/tests/ekubo.cairo
