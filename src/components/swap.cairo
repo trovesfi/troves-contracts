@@ -79,6 +79,10 @@ pub fn get_swap_params(
 #[generate_trait]
 pub impl AvnuMultiRouteSwapImpl of AvnuMultiRouteSwapTrait {
     fn swap(self: AvnuMultiRouteSwap, oracle: IPriceOracleDispatcher) -> u256 {
+        self.non_strict_swap(oracle, false)
+    }
+
+    fn non_strict_swap(self: AvnuMultiRouteSwap, oracle: IPriceOracleDispatcher, allow_non_zero_integrator_fee_bps: bool) -> u256 {
         let amount_out = avnuSwap(
             SwapInfoMinusAmount {
                 token_from_address: self.token_from_address,
@@ -90,7 +94,8 @@ pub impl AvnuMultiRouteSwapImpl of AvnuMultiRouteSwapTrait {
             },
             self.token_from_amount,
             self.token_to_amount,
-            self.token_to_min_amount
+            self.token_to_min_amount,
+            allow_non_zero_integrator_fee_bps
         );
 
         if (self.token_to_min_amount == 0) {
@@ -140,13 +145,16 @@ fn avnuSwap(
     swapInfo: SwapInfoMinusAmount,
     token_from_amount: u256,
     token_to_amount: u256,
-    token_to_min_amount: u256
+    token_to_min_amount: u256,
+    allow_non_zero_integrator_fee_bps: bool
 ) -> u256 {
     let toToken = ERC20ABIDispatcher { contract_address: swapInfo.token_to_address };
     let this = get_contract_address();
     let pre_bal = toToken.balanceOf(this);
 
-    assert(swapInfo.integrator_fee_amount_bps == 0, 'require avnu fee bps 0');
+    if (!allow_non_zero_integrator_fee_bps) {
+        assert(swapInfo.integrator_fee_amount_bps == 0, 'require avnu fee bps 0');
+    }
     assert(swapInfo.beneficiary == this, 'invalid swap beneficiary');
 
     let avnuAddress = constants::AVNU_EX();
