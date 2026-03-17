@@ -258,13 +258,13 @@ mod ConcLiquidityVault {
             self.common.assert_not_paused();
             let caller = get_caller_address();
 
+            self.handle_fees();
+
             let max_shares = self.balance_of(caller);
             assert(shares <= max_shares, 'insufficient shares');
 
             let userPosition = self.convert_to_assets(shares);
             assert(userPosition.liquidity > 0, 'invalid liquidity removed');
-
-            self.handle_fees();
 
             let pool_key = self.pool_key.read();
             let old_liq = self.get_position().liquidity;
