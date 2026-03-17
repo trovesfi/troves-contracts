@@ -128,13 +128,14 @@ async function rebalance() {
 
 async function upgrade() {
     const { class_hash } = await myDeclare("ConcLiquidityVault");
+
     // ! Ensure correct strategy
     const addr = EkuboCLVaultStrategies.find((strategy) => strategy.name.includes('xSTRK'))?.address.address;
     if (!addr) {
         throw new Error('No strategy found');
     }
     const cls = await getRpcProvider().getClassAt(addr);
-    const contract = new Contract(cls.abi, addr, getRpcProvider());
+    const contract = new Contract({abi: cls.abi, address: addr, provider: getRpcProvider()});
     const acc = getAccount(accountKeyMap[SUPER_ADMIN]);
 
     const call = await contract.populate("upgrade", [class_hash]);
@@ -162,41 +163,41 @@ function getSortedTokens(token0: string, token1: string) {
 // 0x104d7db720522a6
 if (require.main === module) {
     // deploy cl vault
-    const myToken0 = xsBTC;
-    const myToken1 = solvBTC;
-    const decimals = 18;
+    // const myToken0 = xsBTC;
+    // const myToken1 = solvBTC;
+    // const decimals = 18;
 
-    const [token0, token1] = getSortedTokens(myToken0, myToken1);
-    console.log('token0', token0);
-    console.log('token1', token1);
-    const poolKey = createPoolKey(
-        token0,
-        token1,
-        '34028236692093847977029636859101184',
-        200,
-        0
-    );
+    // const [token0, token1] = getSortedTokens(myToken0, myToken1);
+    // console.log('token0', token0);
+    // console.log('token1', token1);
+    // const poolKey = createPoolKey(
+    //     token0,
+    //     token1,
+    //     '34028236692093847977029636859101184',
+    //     200,
+    //     0
+    // );
 
-    // if equal, price is in token1 per token0, i.e. token0 price / token1 price
-    const minPrice = ContractAddr.from(myToken0).eqString(token0) ? 0.997 : 1;
-    const maxPrice = ContractAddr.from(myToken0).eqString(token0) ? 1 : 1.003;
+    // // if equal, price is in token1 per token0, i.e. token0 price / token1 price
+    // const minPrice = ContractAddr.from(myToken0).eqString(token0) ? 0.997 : 1;
+    // const maxPrice = ContractAddr.from(myToken0).eqString(token0) ? 1 : 1.003;
 
-    const bounds = createBounds(
-        priceToTick(minPrice, false, poolKey.tick_spacing, decimals, decimals),
-        priceToTick(maxPrice, false, poolKey.tick_spacing, decimals, decimals)
-    );
+    // const bounds = createBounds(
+    //     priceToTick(minPrice, false, poolKey.tick_spacing, decimals, decimals),
+    //     priceToTick(maxPrice, false, poolKey.tick_spacing, decimals, decimals)
+    // );
 
-    console.log('bounds', bounds);
-    console.log('Pool key: ', poolKey);
-    declareAndDeployConcLiquidityVault(
-        poolKey,
-        bounds,
-        1000, // 10% fee
-        "0x06419f7DeA356b74bC1443bd1600AB3831b7808D1EF897789FacFAd11a172Da7", // fee collector
-        "tEkubo xtBTC/tBTC",
-        "tEkxtBTCtBTC",
-     );
+    // console.log('bounds', bounds);
+    // console.log('Pool key: ', poolKey);
+    // declareAndDeployConcLiquidityVault(
+    //     poolKey,
+    //     bounds,
+    //     1000, // 10% fee
+    //     "0x06419f7DeA356b74bC1443bd1600AB3831b7808D1EF897789FacFAd11a172Da7", // fee collector
+    //     "tEkubo xtBTC/tBTC",
+    //     "tEkxtBTCtBTC",
+    //  );
     // rebalance();
 
-    // upgrade()
+    upgrade()
 }
