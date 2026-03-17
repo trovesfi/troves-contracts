@@ -1,6 +1,6 @@
 [package]
 name = "strkfarm_contracts"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2023_11"
 
 # See more keys and their definitions at https://docs.swmansion.com/scarb/docs/reference/manifest.html
